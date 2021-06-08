@@ -19,7 +19,8 @@
 typedef    void*(*fword)(void);
 
 fword* i_ptr = NULL;
-void print_ds(void);
+int print_ds(char* str, int len);
+int print_rs(char* str, int len);
 void print_fn_impl (void* fp, const char* msg, const char* fname);
 
 #define get_shift()    3*(tors - BASE_OF_STACK)
@@ -35,7 +36,9 @@ void print_fn_impl (void* fp, const char* msg, const char* fname);
 #define print_fn_msg(p,m)
 #endif
 
+bool enable_print_addr = true;
 bool enable_print_ds = true;
+bool enable_print_rs = true;
 
 
 #define BASE_OF_STACK   10
@@ -44,31 +47,90 @@ uintptr_t data_stack[1000];
 unsigned int tors;
 unsigned int tods;
 
-#define PRINT_BUF_SIZE  40
+#define PRINT_BUF_SIZE  120
 void print_fn_impl (void* fp, const char* msg, const char* fname)
 {
     char str[PRINT_BUF_SIZE];
+    int start_col = 0;
+    int null_idx = 0;
     int len;
+    
 
     // Space fill buffer and null terminate
     memset(str, ' ', sizeof(str));
     str[PRINT_BUF_SIZE - 1] = '\0';
 
-    len = snprintf(str, PRINT_BUF_SIZE, "%p: %*s%s %s", fp, get_shift(), "", fname, msg);
+    if (enable_print_addr) {
+        len = snprintf(str, PRINT_BUF_SIZE, "%p: ", fp);
+        null_idx = start_col + len;
+        start_col += len;
+    }
+
+    str[null_idx] = ' '; // Remove the null to leave full buffer available.
+    len = snprintf(str+start_col, PRINT_BUF_SIZE - start_col, "%*s%s %s", get_shift(), "", fname, msg);
+    null_idx = start_col + len;
+    start_col += 30;
+
     
     if (enable_print_ds) {
-        str[len] = ' '; // Extend spaces to end of buffer.
-        str[PRINT_BUF_SIZE - 1] = '\0';
+        str[null_idx] = ' '; // Remove the null to leave full buffer available.
+        len = print_ds(str+start_col, PRINT_BUF_SIZE - start_col);
+        null_idx = start_col + len;
+        start_col += 30;
     }
 
-    printf("%s", str);
-
-    if (enable_print_ds) {
-        print_ds();
+    if (enable_print_rs) {
+        str[null_idx] = ' '; // Remove the null to leave full buffer available.
+        len = print_rs(str+start_col, PRINT_BUF_SIZE - start_col);
+        null_idx = start_col + len;
     }
 
+    // Make sure the full buffer is terminated
+    str[PRINT_BUF_SIZE - 1] = '\0';
+    printf("%s\n", str);
 }
 
+int print_ds(char* str, int len)
+{
+    int used = 0;
+    int idx;
+
+    used += snprintf (str, len, "     TOS ---> ");
+
+    for (idx = tods; idx>BASE_OF_STACK; idx--)
+    {
+        int dat = (int)data_stack[idx];
+
+        if (used >= len) {
+            break;
+        }
+
+        used += snprintf (str+used, len - used, "%3d ", dat);
+    }
+
+    return used;
+}
+
+int print_rs(char* str, int len)
+{
+    int used = 0;
+    int idx;
+
+    used += snprintf (str, len, "     TOS ---> ");
+
+    for (idx = tors; idx>BASE_OF_STACK; idx--)
+    {
+        unsigned int dat = (unsigned int)return_stack[idx];
+
+        if (used >= len) {
+            break;
+        }
+
+        used += snprintf (str+used, len - used, "%d ", dat);
+    }
+
+    return used;
+}
 
 
 inline static void push_r (fword* v)
@@ -91,20 +153,7 @@ inline static intptr_t pop_d (void)
     return data_stack[tods--];
 }
 
-void print_ds(void)
-{
-    int idx = tods;
 
-    printf("     TOS ---> ");
-
-    for (idx = tods; idx>BASE_OF_STACK; idx--)
-    {
-        int dat = (int)data_stack[idx];
-
-        printf ("%3d ", dat);
-    }
-    puts("");
-}
 
 void* atom_next (void)
 {
