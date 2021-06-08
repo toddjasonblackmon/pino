@@ -21,7 +21,7 @@ typedef    void*(*fword)(void);
 fword* i_ptr = NULL;
 int print_ds(char* str, int len);
 int print_rs(char* str, int len);
-void print_fn_impl (void* fp, const char* msg, const char* fname);
+void print_fn_impl (void* fp, const char* msg, const char* out, const char* fname);
 
 #define get_shift()    3*(tors - BASE_OF_STACK)
 
@@ -29,14 +29,18 @@ void print_fn_impl (void* fp, const char* msg, const char* fname);
 #define FORTH_LIT(x)         (fword)(x)
 
 #if 1
-#define print_fn(p)         print_fn_impl (p, "", __func__)
-#define print_fn_msg(p,m)   print_fn_impl (p, m, __func__)
+#define print_fn(p)         print_fn_impl (p, "", "", __func__)
+#define print_fn_msg(p,m)   print_fn_impl (p, m, "", __func__)
+#define print_fn_out(p,m)   print_fn_impl (p, "", m, __func__)
 #else
 #define print_fn(p)
 #define print_fn_msg(p,m)
+#define print_fn_out(p,m)
 #endif
 
 bool enable_print_addr = true;
+bool enable_print_opcode = true;
+bool enable_stack_shift = true;
 bool enable_print_ds = true;
 bool enable_print_rs = true;
 
@@ -48,13 +52,12 @@ unsigned int tors;
 unsigned int tods;
 
 #define PRINT_BUF_SIZE  120
-void print_fn_impl (void* fp, const char* msg, const char* fname)
+void print_fn_impl (void* fp, const char* msg, const char* out, const char* fname)
 {
     char str[PRINT_BUF_SIZE];
     int start_col = 0;
     int null_idx = 0;
     int len;
-    
 
     // Space fill buffer and null terminate
     memset(str, ' ', sizeof(str));
@@ -66,11 +69,26 @@ void print_fn_impl (void* fp, const char* msg, const char* fname)
         start_col += len;
     }
 
-    str[null_idx] = ' '; // Remove the null to leave full buffer available.
-    len = snprintf(str+start_col, PRINT_BUF_SIZE - start_col, "%*s%s %s", get_shift(), "", fname, msg);
-    null_idx = start_col + len;
-    start_col += 30;
+    if (enable_stack_shift) {
+        str[null_idx] = ' '; // Remove the null to leave full buffer available.
+        len = snprintf(str+start_col, PRINT_BUF_SIZE - start_col, "%*s", get_shift(), "");
+        null_idx = start_col + len;
+        start_col += len;
+    }
 
+    if (enable_print_opcode) {
+        str[null_idx] = ' '; // Remove the null to leave full buffer available.
+        len = snprintf(str+start_col, PRINT_BUF_SIZE - start_col, "%s %s", fname, msg);
+        null_idx = start_col + len;
+        start_col += len;
+    }
+
+    str[null_idx] = ' '; // Remove the null to leave full buffer available.
+    len = snprintf(str+start_col, PRINT_BUF_SIZE - start_col, "%s", out);
+    null_idx = start_col + len;
+
+    // Start tables in a fixed column.
+    start_col = 50;
     
     if (enable_print_ds) {
         str[null_idx] = ' '; // Remove the null to leave full buffer available.
@@ -87,7 +105,10 @@ void print_fn_impl (void* fp, const char* msg, const char* fname)
 
     // Make sure the full buffer is terminated
     str[PRINT_BUF_SIZE - 1] = '\0';
-    printf("%s\n", str);
+
+    if (null_idx > 0) {
+        printf("%s\n", str);
+    }
 }
 
 int print_ds(char* str, int len)
@@ -210,8 +231,8 @@ void* atom_do (void)
     print_fn(atom_do);
     push_r(i_ptr);
 
+    push_r((void*)pop_d());  // Index
     push_r((void*)pop_d());  // Limit
-    push_r((void*)pop_d());  // Start
 
     return atom_next();
 }
@@ -219,12 +240,24 @@ void* atom_do (void)
 void* atom_loop (void)
 {
     char tmpstr[40];
+    fword* loop_ptr;
 
-    pop_r();    // Start
-    pop_r();    // Limit
-    fword* loop_ptr = pop_r();
 
-    sprintf(tmpstr, "to %p", *loop_ptr);
+    // do {} while (++index < limit)
+
+    if (++return_stack[tors-1] < return_stack[tors]) {
+        loop_ptr = (fword*)return_stack[tors-2];
+        
+        i_ptr = loop_ptr;   // Jump back
+ 
+        sprintf(tmpstr, "back to %p", *loop_ptr);
+    } else {
+        intptr_t idx, lim;
+        lim = (int)pop_r();    // Limit
+        idx = (int)pop_r();    // Index
+        pop_r();
+        strcpy (tmpstr, "loop exit");
+    }
 
     print_fn_msg(atom_loop, tmpstr);
 
@@ -282,8 +315,8 @@ void* atom_dot ()
 
     val = pop_d ();
 
-    sprintf(numstr, "print: %d", val);
-    print_fn_msg(atom_literal, numstr);
+    sprintf(numstr, "out: %d", val);
+    print_fn_out(atom_literal, numstr);
 
     print_fn(atom_dot);
     return atom_next();
@@ -301,20 +334,6 @@ void* fn (void)                     \
 
 
 // : fib  ( n -- )  1 1 rot 0 do dup rot dup . + loop drop drop ; 
-
-fword test[] = {
-    atom_literal,
-    FORTH_LIT(1),
-    atom_literal,
-    FORTH_LIT(2),
-    atom_literal,
-    FORTH_LIT(3),
-    atom_literal,
-    FORTH_LIT(4),
-    atom_exit
-};
-
-
 fword fib[] = {
     atom_literal, 
     FORTH_LIT(1),
@@ -327,7 +346,6 @@ fword fib[] = {
     atom_dup,
     atom_rot,
     atom_dup,
-//    FORTH_WORD(test),
     atom_dot,
     atom_plus,
     atom_loop,
@@ -337,7 +355,7 @@ fword fib[] = {
 };
  
 
-// : pgm_1         10 fib ;
+// : pgm_1 10 fib ;
 fword pgm_1[] = {
     atom_literal,
     FORTH_LIT(10),
