@@ -19,35 +19,92 @@
 typedef    void*(*fword)(void);
 
 fword* i_ptr = NULL;
+void print_ds(void);
+void print_fn_impl (void* fp, const char* msg, const char* fname);
 
-#define get_shift()    3*(tos - BASE_OF_STACK)
+#define get_shift()    3*(tors - BASE_OF_STACK)
 
 #define FORTH_WORD(wp)       (fword)((uint32_t)(wp) + 1)
 #define FORTH_LIT(x)         (fword)(x)
 
-#define PRINT_ADDR
-#ifdef PRINT_ADDR
-#define print_fn(p)  printf("%p: %*s%s\n", p, get_shift(), "", __func__)
-#define print_fn_msg(p,m)  printf("%p: %*s%s %s\n", p, get_shift(), "", __func__, m)
+#if 1
+#define print_fn(p)         print_fn_impl (p, "", __func__)
+#define print_fn_msg(p,m)   print_fn_impl (p, m, __func__)
 #else
-#define print_fn(p)  printf("%*s%s\n", get_shift(), "", __func__)
-#define print_fn_msg(p,m)  printf("%*s%s %s\n", get_shift(), "", __func__, m)
+#define print_fn(p)
+#define print_fn_msg(p,m)
 #endif
+
+bool enable_print_ds = true;
+
 
 #define BASE_OF_STACK   10
 uintptr_t return_stack[1000];
-unsigned int tos;
+uintptr_t data_stack[1000];
+unsigned int tors;
+unsigned int tods;
+
+#define PRINT_BUF_SIZE  40
+void print_fn_impl (void* fp, const char* msg, const char* fname)
+{
+    char str[PRINT_BUF_SIZE];
+    int len;
+
+    // Space fill buffer and null terminate
+    memset(str, ' ', sizeof(str));
+    str[PRINT_BUF_SIZE - 1] = '\0';
+
+    len = snprintf(str, PRINT_BUF_SIZE, "%p: %*s%s %s", fp, get_shift(), "", fname, msg);
+    
+    if (enable_print_ds) {
+        str[len] = ' '; // Extend spaces to end of buffer.
+        str[PRINT_BUF_SIZE - 1] = '\0';
+    }
+
+    printf("%s", str);
+
+    if (enable_print_ds) {
+        print_ds();
+    }
+
+}
+
+
 
 inline static void push_r (fword* v)
 {
-    return_stack[++tos] = (uintptr_t)v;
+    return_stack[++tors] = (uintptr_t)v;
 }
 
 inline static fword* pop_r (void)
 {
-    return (fword*)return_stack[tos--];
+    return (fword*)return_stack[tors--];
 }
 
+inline static void push_d (intptr_t v)
+{
+    data_stack[++tods] = v;
+}
+    
+inline static intptr_t pop_d (void)
+{
+    return data_stack[tods--];
+}
+
+void print_ds(void)
+{
+    int idx = tods;
+
+    printf("     TOS ---> ");
+
+    for (idx = tods; idx>BASE_OF_STACK; idx--)
+    {
+        int dat = (int)data_stack[idx];
+
+        printf ("%3d ", dat);
+    }
+    puts("");
+}
 
 void* atom_next (void)
 {
@@ -74,8 +131,11 @@ void* atom_literal (void)
     // Interpret the next location as a number, print it and skip.
     int num = (intptr_t)*i_ptr;
 
+    push_d(num);
+
     sprintf(numstr, "%d", num);
     print_fn_msg(atom_literal, numstr);
+
 
     i_ptr++;
 
@@ -98,10 +158,11 @@ void* atom_exit (void)
 
 void* atom_do (void)
 {
-    void* next_instruction;
-
     print_fn(atom_do);
     push_r(i_ptr);
+
+    push_r((void*)pop_d());  // Limit
+    push_r((void*)pop_d());  // Start
 
     return atom_next();
 }
@@ -110,6 +171,8 @@ void* atom_loop (void)
 {
     char tmpstr[40];
 
+    pop_r();    // Start
+    pop_r();    // Limit
     fword* loop_ptr = pop_r();
 
     sprintf(tmpstr, "to %p", *loop_ptr);
@@ -121,6 +184,63 @@ void* atom_loop (void)
     return atom_next();
 }
  
+void* atom_rot (void)
+{
+    uintptr_t tmp = data_stack[tods];
+
+    tmp                  = data_stack[tods - 2];
+    data_stack[tods - 2] = data_stack[tods - 1];
+    data_stack[tods - 1] = data_stack[tods];
+    data_stack[tods]     = tmp;
+
+    print_fn(atom_rot);
+    return atom_next();
+}
+
+void* atom_dup (void)
+{
+    push_d (data_stack[tods]);
+
+    print_fn(atom_dup);
+    return atom_next();
+}
+
+void* atom_drop ()
+{
+    pop_d ();
+
+    print_fn(atom_drop);
+    return atom_next();
+}
+
+void* atom_plus (void)
+{
+    int a, b;
+    
+    a = (int)pop_d();
+    b = (int)pop_d();
+    a += b;
+    push_d((intptr_t)a);
+    
+    print_fn(atom_plus);
+    return atom_next();
+}
+
+void* atom_dot ()
+{
+    char numstr[20];
+    int val;
+
+    val = pop_d ();
+
+    sprintf(numstr, "print: %d", val);
+    print_fn_msg(atom_literal, numstr);
+
+    print_fn(atom_dot);
+    return atom_next();
+}
+
+
 
 #define CREATE_PLACEHOLDER(fn)      \
 void* fn (void)                     \
@@ -130,11 +250,6 @@ void* fn (void)                     \
 }                                   \
                                     \
 
-CREATE_PLACEHOLDER(atom_rot)
-CREATE_PLACEHOLDER(atom_dup)
-CREATE_PLACEHOLDER(atom_drop)
-CREATE_PLACEHOLDER(atom_plus)
-CREATE_PLACEHOLDER(atom_dot)
 
 // : fib  ( n -- )  1 1 rot 0 do dup rot dup . + loop drop drop ; 
 
@@ -163,7 +278,7 @@ fword fib[] = {
     atom_dup,
     atom_rot,
     atom_dup,
-    FORTH_WORD(test),
+//    FORTH_WORD(test),
     atom_dot,
     atom_plus,
     atom_loop,
@@ -187,7 +302,8 @@ int main (void)
 {
     // Init machine
     memset(return_stack, 0, sizeof(return_stack));
-    tos = BASE_OF_STACK;
+    tors = BASE_OF_STACK;
+    tods = BASE_OF_STACK;
 
     // Set to the start of the program
     i_ptr = pgm_1;
