@@ -48,23 +48,27 @@ fword interpret[] = {
     atom_begin,
     atom_lex,
     atom_dup,
-    atom_if,
-    FORTH_LIT(3),
-    atom_drop,
-    FORTH_WORD(parse_word),
+    // atom_if,
+    // FORTH_LIT(3),
+    // atom_drop,
+    // FORTH_WORD(parse_word),
     // atom_then,
     atom_while,
+    atom_drop,
     atom_exit
 };
 
 
 fword pgm_2[] = {
-    atom_literal,
-    FORTH_LIT(0),
     atom_dup,
     atom_begin,
+    atom_literal,
+    FORTH_LIT('>'),
+    atom_emit,
     atom_input,
     FORTH_WORD(interpret),
+    atom_literal,
+    FORTH_LIT(1),   // Dummy to force end of loop
     atom_not,
     atom_while,
     atom_exit
@@ -121,6 +125,9 @@ fword pgm_4[] = {
 };
 
 fword test_input[] = {
+    atom_literal,
+    FORTH_LIT('>'),
+    atom_emit,
     atom_input,
     atom_exit
 };

@@ -23,10 +23,10 @@ int print_ds(char* str, int len);
 int print_rs(char* str, int len);
 void print_fn_impl (void* fp, const char* msg, const char* out, const char* fname);
 
-#define get_shift()    3*(tors - BASE_OF_STACK)
+#define get_shift()         3*(tors - BASE_OF_STACK)
 
-#define FORTH_WORD(wp)       (fword)((uint32_t)(wp) + 1)
-#define FORTH_LIT(x)         (fword)(x)
+#define FORTH_WORD(wp)      (fword)((uint32_t)(wp) + 1)
+#define FORTH_LIT(x)        (fword)(x)
 
 #if 1
 #define print_fn(p)         print_fn_impl (p, "", "", __func__)
@@ -113,6 +113,8 @@ void print_fn_impl (void* fp, const char* msg, const char* out, const char* fnam
     if (null_idx > 0) {
         printf("%s\n", str);
     }
+
+    fflush(stdout);
 }
 
 int print_ds(char* str, int len)
@@ -375,8 +377,6 @@ void* atom_subtract (void)
     return atom_next();
 }
 
-
-
 void* atom_dot ()
 {
     char numstr[20];
@@ -443,6 +443,49 @@ void* atom_input (void)
     return atom_next();
 }
 
+void* atom_emit ()
+{
+    char val;
+
+    val = pop_d ();
+
+    print_fn(atom_emit);
+    printf("%c ", val);
+    fflush(stdout);
+
+    return atom_next();
+}
+
+void* atom_lex ()
+{
+    bool string_start = (input_offset == 0);
+    char* tok;
+    char tokstr[20];
+
+    // Parse the next token, push address of next token on stack
+    // If none seen, push 0. (NULL)
+    // Update the input pointer
+
+    if (string_start) {
+        tok = strtok(input_buffer, "\r\n\t ");
+    } else {
+        tok = strtok(NULL, "\r\n\t ");
+    }
+
+    push_d((intptr_t)tok);
+
+    if (tok == NULL) {
+        tok = "NIL";
+    } else {
+        input_offset += strlen(tok);
+    }
+    
+    snprintf(tokstr, sizeof(tokstr), "\"%s\"", tok);
+
+    print_fn_msg(atom_lex, tokstr);
+    return atom_next();
+}
+
 
 
 
@@ -457,7 +500,6 @@ void* fn (void)                     \
 CREATE_PLACEHOLDER(atom_find_word);
 CREATE_PLACEHOLDER(atom_execute);
 CREATE_PLACEHOLDER(atom_number);
-CREATE_PLACEHOLDER(atom_lex);
 
 #include "pgm_data.h"
     
@@ -471,7 +513,7 @@ int main (void)
     input_buffer[0] = '\0';
 
     // Set to the start of the program
-    i_ptr = test_input;
+    i_ptr = pgm_2;
 
     // Returns the next word to run
     fword next_word = atom_next();
