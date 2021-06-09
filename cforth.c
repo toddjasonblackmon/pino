@@ -50,6 +50,10 @@ uintptr_t return_stack[1000];
 uintptr_t data_stack[1000];
 unsigned int tors;
 unsigned int tods;
+#define INPUT_BUFFER_SIZE 256
+char input_buffer[INPUT_BUFFER_SIZE];
+unsigned int input_offset;
+
 
 #define PRINT_BUF_SIZE  120
 void print_fn_impl (void* fp, const char* msg, const char* out, const char* fname)
@@ -266,6 +270,37 @@ void* atom_loop (void)
     return atom_next();
 }
  
+void* atom_begin (void)
+{
+    print_fn(atom_begin);
+    push_r(i_ptr);
+
+    return atom_next();
+}
+ 
+void* atom_while (void)
+{
+    char tmpstr[40];
+    fword* loop_ptr;
+
+    int val = (int)pop_d();
+
+    if (val) {
+        loop_ptr = (fword*)return_stack[tors];
+        
+        i_ptr = loop_ptr;   // Jump back
+ 
+        sprintf(tmpstr, "back to %p", *loop_ptr);
+    } else {
+        pop_r();
+        strcpy (tmpstr, "loop exit");
+    }
+
+    print_fn_msg(atom_while, tmpstr);
+
+    return atom_next();
+}
+
 void* atom_rot (void)
 {
     uintptr_t tmp = data_stack[tods];
@@ -279,11 +314,30 @@ void* atom_rot (void)
     return atom_next();
 }
 
+void* atom_swap (void)
+{
+    uintptr_t tmp = data_stack[tods];
+
+    data_stack[tods] = data_stack[tods - 1];
+    data_stack[tods-1]     = tmp;
+
+    print_fn(atom_swap);
+    return atom_next();
+}
+
 void* atom_dup (void)
 {
     push_d (data_stack[tods]);
 
     print_fn(atom_dup);
+    return atom_next();
+}
+
+void* atom_not (void)
+{
+    data_stack[tods] = !(data_stack[tods]);
+
+    print_fn(atom_not);
     return atom_next();
 }
 
@@ -308,6 +362,21 @@ void* atom_plus (void)
     return atom_next();
 }
 
+void* atom_subtract (void)
+{
+    int a, b;
+    
+    a = (int)pop_d();
+    b = (int)pop_d();
+    b -= a;
+    push_d((intptr_t)b);
+    
+    print_fn(atom_subtract);
+    return atom_next();
+}
+
+
+
 void* atom_dot ()
 {
     char numstr[20];
@@ -322,6 +391,59 @@ void* atom_dot ()
     return atom_next();
 }
 
+void* atom_if (void)
+{
+    char numstr[20];
+    int val;
+
+    int jmp = (intptr_t)*i_ptr;
+
+    val = pop_d ();
+
+    if (val)
+    {
+        i_ptr++;
+    }
+    else
+    {
+        i_ptr += jmp;
+    }
+
+
+    sprintf(numstr, "(%d) %d", jmp, val);
+    print_fn_msg(atom_if, numstr);
+
+    return atom_next();
+}
+
+void* atom_else (void)
+{
+    char numstr[20];
+
+    int jmp = (intptr_t)*i_ptr;
+
+    i_ptr += jmp;
+
+
+    sprintf(numstr, "(%d)", jmp);
+    print_fn_msg(atom_else, numstr);
+
+    return atom_next();
+}
+
+void* atom_input (void)
+{
+    input_offset = 0;
+    input_buffer[0]='\0';
+    fgets(input_buffer, sizeof(input_buffer), stdin);
+    // Strip newlines.
+    input_buffer[strcspn(input_buffer, "\n\r")] = ' ';
+
+    print_fn_msg(atom_input, input_buffer);
+    return atom_next();
+}
+
+
 
 
 #define CREATE_PLACEHOLDER(fn)      \
@@ -332,38 +454,13 @@ void* fn (void)                     \
 }                                   \
                                     \
 
+CREATE_PLACEHOLDER(atom_find_word);
+CREATE_PLACEHOLDER(atom_execute);
+CREATE_PLACEHOLDER(atom_number);
+CREATE_PLACEHOLDER(atom_lex);
 
-// : fib  ( n -- )  1 1 rot 0 do dup rot dup . + loop drop drop ; 
-fword fib[] = {
-    atom_literal, 
-    FORTH_LIT(1),
-    atom_literal, 
-    FORTH_LIT(1),
-    atom_rot,
-    atom_literal, 
-    FORTH_LIT(0),
-    atom_do,
-    atom_dup,
-    atom_rot,
-    atom_dup,
-    atom_dot,
-    atom_plus,
-    atom_loop,
-    atom_drop,
-    atom_drop,
-    atom_exit
-};
- 
-
-// : pgm_1 10 fib ;
-fword pgm_1[] = {
-    atom_literal,
-    FORTH_LIT(10),
-    FORTH_WORD(fib),
-    atom_exit
-};
-
-
+#include "pgm_data.h"
+    
 
 int main (void)
 {
@@ -371,9 +468,10 @@ int main (void)
     memset(return_stack, 0, sizeof(return_stack));
     tors = BASE_OF_STACK;
     tods = BASE_OF_STACK;
+    input_buffer[0] = '\0';
 
     // Set to the start of the program
-    i_ptr = pgm_1;
+    i_ptr = test_input;
 
     // Returns the next word to run
     fword next_word = atom_next();
