@@ -45,7 +45,6 @@ bool enable_print_ds = true;
 bool enable_print_rs = true;
 
 
-
 void* atom_next (void);
 void* atom_literal (void);
 void* atom_exit (void);
@@ -53,6 +52,7 @@ void* atom_do (void);
 void* atom_loop (void);
 void* atom_begin (void);
 void* atom_while (void);
+void* atom_again (void);
 void* atom_rot (void);
 void* atom_swap (void);
 void* atom_dup (void);
@@ -68,6 +68,10 @@ void* atom_emit (void);
 void* atom_lex (void);
 void* atom_bye (void);
 void* atom_execute (void);
+void* atom_number (void);
+
+bool check_stack_underflows(void);
+
 
 
 
@@ -103,6 +107,9 @@ native_fword native_dictionary[] = {
     NATIVE_ENTRY(19, "lex",      atom_lex),
     NATIVE_ENTRY(20, "bye",      atom_bye),
     NATIVE_ENTRY(21, "execute",  atom_execute),
+    NATIVE_ENTRY(22, "again",    atom_again),
+    NATIVE_ENTRY(23, "number",   atom_number),
+
 };
 
 unsigned int end_of_dict = sizeof(native_dictionary)/sizeof(native_fword) - 1;
@@ -112,6 +119,7 @@ unsigned int end_of_dict = sizeof(native_dictionary)/sizeof(native_fword) - 1;
 
 
 #define BASE_OF_STACK   10
+#define MAX_STACK_SIZE 1000
 uintptr_t return_stack[1000];
 uintptr_t data_stack[1000];
 unsigned int tors;
@@ -120,6 +128,32 @@ unsigned int tods;
 char input_buffer[INPUT_BUFFER_SIZE];
 unsigned int input_offset;
 bool compiler_state = false;    // true = Compiler, false = Interpreter
+
+void check_stack_range(void)
+{
+    if (tors < BASE_OF_STACK) {
+        printf("Return stack underflow by %d entries\n", BASE_OF_STACK - tors);
+        exit(1);
+    }
+
+    if (tods < BASE_OF_STACK) {
+        printf("Data stack underflow by %d entries\n", BASE_OF_STACK - tods);
+        exit(1);
+    }
+
+    if (tors >= MAX_STACK_SIZE) {
+        printf("Return stack overflow by %d entries\n", tors - (MAX_STACK_SIZE - 1));
+        exit(1);
+    }
+
+    if (tods >= MAX_STACK_SIZE) {
+        printf("Data stack overflow by %d entries\n", tods - (MAX_STACK_SIZE - 1));
+        exit(1);
+    }
+}
+
+
+
 
 
 #define PRINT_BUF_SIZE  120
@@ -346,6 +380,24 @@ void* atom_begin (void)
 
     return atom_next();
 }
+
+void* atom_again (void)
+{
+    char tmpstr[40];
+    fword* loop_ptr;
+
+
+    loop_ptr = (fword*)return_stack[tors];
+
+    i_ptr = loop_ptr;   // Jump back
+
+    sprintf(tmpstr, "back to %p", *loop_ptr);
+
+    print_fn_msg(atom_again, tmpstr);
+
+    return atom_next();
+}
+
 
 void* atom_while (void)
 {
@@ -581,10 +633,12 @@ void* atom_find_word (void)
 
     if (cur_idx == 0) {
             printf("Word not found\n");
+            push_d((intptr_t)word_to_find);
             push_d(0);
     } else {
             printf("Match found \"%s\" == \"%s\" %p \n", word_to_find, cur_entry->name, cur_entry->fn);
             push_d((intptr_t)cur_entry->fn);
+            push_d(1);
     }
 
     print_fn(atom_find_word);
@@ -624,6 +678,27 @@ void* atom_bye (void)
     exit(0);
 }
 
+void* atom_number (void)
+{
+    char* tok = (char*)pop_d();
+    int num;
+    int retval;
+
+
+    // Attempt to interpret it as a number.
+    retval = sscanf(tok, "%d", &num);
+    printf ("sscanf retval: %d\n", retval);
+    if (retval > 0) {
+        push_d(num);    // Push the number
+        push_d(1);      // Success
+    } else {
+        push_d(0);      // Failed to read the number
+    }
+
+    print_fn(atom_number);
+    return atom_next();
+};
+
 // Example:
 #define CREATE_PLACEHOLDER(fn)      \
 void* fn (void)                     \
@@ -633,7 +708,6 @@ void* fn (void)                     \
 }                                   \
                                     \
 
-CREATE_PLACEHOLDER(atom_number);
 
 
 
@@ -655,7 +729,7 @@ int main (void)
     input_buffer[0] = '\0';
 
     // Set to the start of the program
-    i_ptr = pgm_2;
+    i_ptr = repl;
 
     // Returns the next word to run
     fword next_word = atom_next();
@@ -664,6 +738,8 @@ int main (void)
     while (next_word != NULL) {
 
         next_word = next_word();
+
+        check_stack_range();
     }
 
     return 0;

@@ -31,53 +31,42 @@ fword pgm_1[] = {
     atom_exit
 };
 
-// : parse_word    find_word dup if execute 1 else number drop then ;
+// : parse_word ( tok -- res ) find_word dup if execute 1 else number drop then ;
 fword parse_word[] = {
     atom_find_word,
-    atom_dup,
-    atom_if,
-    FORTH_LIT(4),
-    atom_execute,
-    atom_literal,
-    FORTH_LIT(1),
-    atom_else,
-    FORTH_LIT(3),
-    atom_number,
-    atom_drop,
+    atom_if, FORTH_LIT(6),
+        atom_execute,
+        atom_literal,
+        FORTH_LIT(1),
+    atom_else, FORTH_LIT(2),
+        atom_number,
     // atom_then,
     atom_exit
 };
 
 
-// : interpret  begin lex dup if parse_word then while drop ;
+// : interpret  ( -- ) begin lex dup if parse_word then while drop ;
 fword interpret[] = {
     atom_begin,
-    atom_lex,
-    atom_dup,
-    atom_if,
-    FORTH_LIT(2),
-    FORTH_WORD(parse_word),
-    // atom_then,
+        atom_lex,
+        atom_dup,
+        atom_if, FORTH_LIT(2),
+            FORTH_WORD(parse_word),
+        // atom_then,
     atom_while,
-    atom_drop,
     atom_exit
 };
 
-// : pgm_2   4 3 begin [char] > emit input interpret 1 while ;
-fword pgm_2[] = {
-    atom_literal,
-    FORTH_LIT(4),
-    atom_literal,
-    FORTH_LIT(3),
+// : repl   begin [char] > emit input interpret 1 while ;
+fword repl[] = {
     atom_begin,
-    atom_literal,
-    FORTH_LIT('>'),
-    atom_emit,
-    atom_input,
-    FORTH_WORD(interpret),
-    atom_literal,
-    FORTH_LIT(1),   // Dummy to force end of loop
-    atom_while,
+        atom_literal,
+        FORTH_LIT('>'),
+        atom_emit,
+
+        atom_input,
+        FORTH_WORD(interpret),
+    atom_again,
     atom_exit
 };
 
