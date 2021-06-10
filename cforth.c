@@ -45,6 +45,72 @@ bool enable_print_ds = true;
 bool enable_print_rs = true;
 
 
+
+void* atom_next (void);
+void* atom_literal (void);
+void* atom_exit (void);
+void* atom_do (void);
+void* atom_loop (void);
+void* atom_begin (void);
+void* atom_while (void);
+void* atom_rot (void);
+void* atom_swap (void);
+void* atom_dup (void);
+void* atom_not (void);
+void* atom_drop (void);
+void* atom_plus (void);
+void* atom_subtract (void);
+void* atom_dot (void);
+void* atom_if (void);
+void* atom_else (void);
+void* atom_input (void);
+void* atom_emit (void);
+void* atom_lex (void);
+void* atom_bye (void);
+void* atom_execute (void);
+
+
+
+typedef struct {
+    uint32_t next;
+    char name[8];
+    fword fn;
+} native_fword;
+
+#define NATIVE_ENTRY(n, name, fn)   {n, name, fn}
+
+native_fword native_dictionary[] = {
+    NATIVE_ENTRY(0,  "",         NULL),
+    NATIVE_ENTRY(0,  "next",     atom_next),
+    NATIVE_ENTRY(1,  "literal",  atom_literal),
+    NATIVE_ENTRY(2,  "exit",     atom_exit),
+    NATIVE_ENTRY(3,  "do",       atom_do),
+    NATIVE_ENTRY(4,  "loop",     atom_loop),
+    NATIVE_ENTRY(5,  "begin",    atom_begin),
+    NATIVE_ENTRY(6,  "while",    atom_while),
+    NATIVE_ENTRY(7,  "rot",      atom_rot),
+    NATIVE_ENTRY(8,  "swap",     atom_swap),
+    NATIVE_ENTRY(9,  "dup",      atom_dup),
+    NATIVE_ENTRY(10, "not",      atom_not),
+    NATIVE_ENTRY(11, "drop",     atom_drop),
+    NATIVE_ENTRY(12, "+",        atom_plus),
+    NATIVE_ENTRY(13, "-",        atom_subtract),
+    NATIVE_ENTRY(14, ".",        atom_dot),
+    NATIVE_ENTRY(15, "if",       atom_if),
+    NATIVE_ENTRY(16, "else",     atom_else),
+    NATIVE_ENTRY(17, "input",    atom_input),
+    NATIVE_ENTRY(18, "emit",     atom_emit),
+    NATIVE_ENTRY(19, "lex",      atom_lex),
+    NATIVE_ENTRY(20, "bye",      atom_bye),
+    NATIVE_ENTRY(21, "execute",  atom_execute),
+};
+
+unsigned int end_of_dict = sizeof(native_dictionary)/sizeof(native_fword) - 1;
+
+
+
+
+
 #define BASE_OF_STACK   10
 uintptr_t return_stack[1000];
 uintptr_t data_stack[1000];
@@ -53,6 +119,7 @@ unsigned int tods;
 #define INPUT_BUFFER_SIZE 256
 char input_buffer[INPUT_BUFFER_SIZE];
 unsigned int input_offset;
+bool compiler_state = false;    // true = Compiler, false = Interpreter
 
 
 #define PRINT_BUF_SIZE  120
@@ -433,9 +500,16 @@ void* atom_else (void)
 
 void* atom_input (void)
 {
+    char* ret;
+
     input_offset = 0;
     input_buffer[0]='\0';
-    fgets(input_buffer, sizeof(input_buffer), stdin);
+
+    ret = fgets(input_buffer, sizeof(input_buffer), stdin);
+    if (ret == NULL) {
+        atom_bye(); // End of input file
+    }
+
     // Strip newlines.
     input_buffer[strcspn(input_buffer, "\n\r")] = ' ';
 
@@ -486,22 +560,71 @@ void* atom_lex ()
     return atom_next();
 }
 
-// Dictionary structure
-// Internal word
-// 0x00 : Next ptr
-// 0x04 : Name[12]  // Null terminated
-// 0x10 : fword to implementation
+void* atom_find_word (void)
+{
+    char* word_to_find;
+    native_fword* cur_entry;
+    unsigned int cur_idx = end_of_dict;
 
-// Forth word
-// 0x00 : Next ptr
-// 0x04 : Name[12]  // Null terminated
-// 0x10 : first fword
-// 0x14 : second fword
-//        ...
-//        fword to atom_exit
+    word_to_find = (char*)pop_d();
+
+    do {
+        cur_entry = &native_dictionary[cur_idx];
+
+        if (!strncmp (word_to_find, cur_entry->name, 7)) {
+            break;
+        }
+
+        cur_idx = cur_entry->next;
+
+    } while (cur_idx != 0);
+
+    if (cur_idx == 0) {
+            printf("Word not found\n");
+            push_d(0);
+    } else {
+            printf("Match found \"%s\" == \"%s\" %p \n", word_to_find, cur_entry->name, cur_entry->fn);
+            push_d((intptr_t)cur_entry->fn);
+    }
+
+    print_fn(atom_find_word);
+
+
+    return atom_next();
+}
+
+
+fword exec_springboard[] = {
+    atom_exit,
+    atom_exit
+};
+
+void* atom_execute (void)
+{
+    char numstr[20];
+    fword word_to_execute = (fword)pop_d();
+
+
+    sprintf(numstr, "%p", word_to_execute);
+
+    print_fn_msg(atom_execute, numstr);
+
+    // Copy to springboard and jump
+
+    exec_springboard[0] = word_to_execute;
+    push_r(i_ptr);
+    i_ptr = exec_springboard;
+    return atom_next();
+}
+
+void* atom_bye (void)
+{
+    print_fn(atom_execute);
+    printf("bye!\n");
+    exit(0);
+}
 
 // Example:
-
 #define CREATE_PLACEHOLDER(fn)      \
 void* fn (void)                     \
 {                                   \
@@ -510,44 +633,9 @@ void* fn (void)                     \
 }                                   \
                                     \
 
-CREATE_PLACEHOLDER(atom_find_word);
-CREATE_PLACEHOLDER(atom_execute);
 CREATE_PLACEHOLDER(atom_number);
-CREATE_PLACEHOLDER(atom_bye);
 
 
-typedef struct {
-    uint32_t next;
-    char name[8];
-    fword fn;
-} native_fword;
-
-#define NATIVE_ENTRY(n, name, fn)   {4*n, name, fn}
-
-native_fword native_dictionary[] = {
-    NATIVE_ENTRY(0,  "",         NULL),
-    NATIVE_ENTRY(0,  "next",     atom_next),
-    NATIVE_ENTRY(1,  "literal",  atom_literal),
-    NATIVE_ENTRY(2,  "exit",     atom_exit),
-    NATIVE_ENTRY(3,  "do",       atom_do),
-    NATIVE_ENTRY(4,  "loop",     atom_loop),
-    NATIVE_ENTRY(5,  "begin",    atom_begin),
-    NATIVE_ENTRY(6,  "while",    atom_while),
-    NATIVE_ENTRY(7,  "rot",      atom_rot),
-    NATIVE_ENTRY(8,  "swap",     atom_swap),
-    NATIVE_ENTRY(9,  "dup",      atom_dup),
-    NATIVE_ENTRY(10, "not",      atom_not),
-    NATIVE_ENTRY(11, "drop",     atom_drop),
-    NATIVE_ENTRY(12, "+",        atom_plus),
-    NATIVE_ENTRY(13, "-",        atom_subtract),
-    NATIVE_ENTRY(14, ".",        atom_dot),
-    NATIVE_ENTRY(15, "if",       atom_if),
-    NATIVE_ENTRY(16, "else",     atom_else),
-    NATIVE_ENTRY(17, "input",    atom_input),
-    NATIVE_ENTRY(18, "emit",     atom_emit),
-    NATIVE_ENTRY(19, "lex",      atom_lex),
-    NATIVE_ENTRY(20, "bye",      atom_bye),
-};
 
 // Get interpretation working on native words only.
 // Get bye working, so repeated typing is possible.
