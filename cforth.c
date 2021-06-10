@@ -13,7 +13,7 @@
 #pragma GCC optimize ("align-functions=16")
 
 // This is implementing a simple fixed forth word to perform the following:
-// : fib  ( n -- )  1 1 rot 0 do dup rot dup . + loop drop drop ; 
+// : fib  ( n -- )  1 1 rot 0 do dup rot dup . + loop drop drop ;
 // : pgm_1         10 fib ;
 
 typedef    void*(*fword)(void);
@@ -93,7 +93,7 @@ void print_fn_impl (void* fp, const char* msg, const char* out, const char* fnam
 
     // Start tables in a fixed column.
     start_col = 50;
-    
+
     if (enable_print_ds) {
         str[null_idx] = ' '; // Remove the null to leave full buffer available.
         len = print_ds(str+start_col, PRINT_BUF_SIZE - start_col);
@@ -174,7 +174,7 @@ inline static void push_d (intptr_t v)
 {
     data_stack[++tods] = v;
 }
-    
+
 inline static intptr_t pop_d (void)
 {
     return data_stack[tods--];
@@ -242,7 +242,7 @@ void* atom_do (void)
 
     return atom_next();
 }
- 
+
 void* atom_loop (void)
 {
     char tmpstr[40];
@@ -253,9 +253,9 @@ void* atom_loop (void)
 
     if (++return_stack[tors-1] < return_stack[tors]) {
         loop_ptr = (fword*)return_stack[tors-2];
-        
+
         i_ptr = loop_ptr;   // Jump back
- 
+
         sprintf(tmpstr, "back to %p", *loop_ptr);
     } else {
         intptr_t idx, lim;
@@ -271,7 +271,7 @@ void* atom_loop (void)
 
     return atom_next();
 }
- 
+
 void* atom_begin (void)
 {
     print_fn(atom_begin);
@@ -279,7 +279,7 @@ void* atom_begin (void)
 
     return atom_next();
 }
- 
+
 void* atom_while (void)
 {
     char tmpstr[40];
@@ -289,9 +289,9 @@ void* atom_while (void)
 
     if (val) {
         loop_ptr = (fword*)return_stack[tors];
-        
+
         i_ptr = loop_ptr;   // Jump back
- 
+
         sprintf(tmpstr, "back to %p", *loop_ptr);
     } else {
         pop_r();
@@ -354,12 +354,12 @@ void* atom_drop ()
 void* atom_plus (void)
 {
     int a, b;
-    
+
     a = (int)pop_d();
     b = (int)pop_d();
     a += b;
     push_d((intptr_t)a);
-    
+
     print_fn(atom_plus);
     return atom_next();
 }
@@ -367,12 +367,12 @@ void* atom_plus (void)
 void* atom_subtract (void)
 {
     int a, b;
-    
+
     a = (int)pop_d();
     b = (int)pop_d();
     b -= a;
     push_d((intptr_t)b);
-    
+
     print_fn(atom_subtract);
     return atom_next();
 }
@@ -479,15 +479,28 @@ void* atom_lex ()
     } else {
         input_offset += strlen(tok);
     }
-    
+
     snprintf(tokstr, sizeof(tokstr), "\"%s\"", tok);
 
     print_fn_msg(atom_lex, tokstr);
     return atom_next();
 }
 
+// Dictionary structure
+// Internal word
+// 0x00 : Next ptr
+// 0x04 : Name[12]  // Null terminated
+// 0x10 : fword to implementation
 
+// Forth word
+// 0x00 : Next ptr
+// 0x04 : Name[12]  // Null terminated
+// 0x10 : first fword
+// 0x14 : second fword
+//        ...
+//        fword to atom_exit
 
+// Example:
 
 #define CREATE_PLACEHOLDER(fn)      \
 void* fn (void)                     \
@@ -500,9 +513,50 @@ void* fn (void)                     \
 CREATE_PLACEHOLDER(atom_find_word);
 CREATE_PLACEHOLDER(atom_execute);
 CREATE_PLACEHOLDER(atom_number);
+CREATE_PLACEHOLDER(atom_bye);
+
+
+typedef struct {
+    uint32_t next;
+    char name[8];
+    fword fn;
+} native_fword;
+
+#define NATIVE_ENTRY(n, name, fn)   {4*n, name, fn}
+
+native_fword native_dictionary[] = {
+    NATIVE_ENTRY(0,  "",         NULL),
+    NATIVE_ENTRY(0,  "next",     atom_next),
+    NATIVE_ENTRY(1,  "literal",  atom_literal),
+    NATIVE_ENTRY(2,  "exit",     atom_exit),
+    NATIVE_ENTRY(3,  "do",       atom_do),
+    NATIVE_ENTRY(4,  "loop",     atom_loop),
+    NATIVE_ENTRY(5,  "begin",    atom_begin),
+    NATIVE_ENTRY(6,  "while",    atom_while),
+    NATIVE_ENTRY(7,  "rot",      atom_rot),
+    NATIVE_ENTRY(8,  "swap",     atom_swap),
+    NATIVE_ENTRY(9,  "dup",      atom_dup),
+    NATIVE_ENTRY(10, "not",      atom_not),
+    NATIVE_ENTRY(11, "drop",     atom_drop),
+    NATIVE_ENTRY(12, "+",        atom_plus),
+    NATIVE_ENTRY(13, "-",        atom_subtract),
+    NATIVE_ENTRY(14, ".",        atom_dot),
+    NATIVE_ENTRY(15, "if",       atom_if),
+    NATIVE_ENTRY(16, "else",     atom_else),
+    NATIVE_ENTRY(17, "input",    atom_input),
+    NATIVE_ENTRY(18, "emit",     atom_emit),
+    NATIVE_ENTRY(19, "lex",      atom_lex),
+    NATIVE_ENTRY(20, "bye",      atom_bye),
+};
+
+// Get interpretation working on native words only.
+// Get bye working, so repeated typing is possible.
+// Get numbers interpreted correctly.
+// Add colon native word to create header in user dictionary
+// Get simple colon definition of 4 2 + working.
 
 #include "pgm_data.h"
-    
+
 
 int main (void)
 {
