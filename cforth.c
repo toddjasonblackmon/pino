@@ -99,15 +99,15 @@ enum {
 };
 
 #undef NATIVE_ENTRY
-#define NATIVE_ENTRY(name, fn)   {entry_##fn - 1, name, fn}
+#define NATIVE_ENTRY(name, fn)   {(entry_##fn - 1)*sizeof(native_fword), name, fn}
 
 native_fword native_dictionary[1000] = {
 #include "native_dictionary.h"
 };
 
-uint32_t* dictionary = (uint32_t*)native_dictionary;
+uint8_t* dictionary = (uint8_t*)native_dictionary;
 
-unsigned int top_of_dict = LAST_ENTRY_IDX - 1;  // Points to current valid word.
+unsigned int top_of_dict = (LAST_ENTRY_IDX - 1)*sizeof(native_fword);  // Points to current valid word.
 unsigned int here = LAST_ENTRY_IDX * sizeof(native_fword);   // Points to next available memory byte
 
 
@@ -627,7 +627,7 @@ void* atom_find_word (void)
     word_to_find = (char*)pop_d();
 
     do {
-        cur_entry = (native_fword*)&dictionary[cur_idx*4];
+        cur_entry = (native_fword*)(dictionary + cur_idx);
 
         if (!strncmp (word_to_find, cur_entry->hdr.name, 7)) {
             break;
@@ -744,38 +744,6 @@ void create_user_dictionary(void)
 
 }
 
-
-
-
-void create(char* name)
-{
-    uint8_t* dict_ptr;
-    int lit = 4;
-    // Create a dictionary header with the name.
-    // Put4 dictionary
-    //here
-    // top_of_dict 
-
-    // Align here, rounding up
-    here = (here + 3) & ~(0x3);
-    dict_ptr = (uint8_t*)dictionary;
-    dict_ptr[here];
-
-    memcpy(&dict_ptr[here], &top_of_dict, 4);
-    here += 4;
-    strncpy(&dict_ptr[here], name, 8);
-    dict_ptr[here+7] = '\0';
-    here += 8;
-    memcpy(&dict_ptr[here], atom_literal, 4);
-    here += 4;
-    memcpy(&dict_ptr[here], &lit, 4);
-    here += 4;
-    memcpy(&dict_ptr[here], atom_exit, 4);
-    here += 4;
-
-    top_of_dict++;
-
-}
 
 
 // Example:
