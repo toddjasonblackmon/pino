@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdalign.h>
 
 // Need this to determine which are atomic vs, non-atomic functions
 // This isn't the normal way to do it, but will match how the 8051 works.
@@ -59,6 +60,7 @@ void* atom_dup (void);
 void* atom_not (void);
 void* atom_drop (void);
 void* atom_plus (void);
+void* atom_mult (void);
 void* atom_subtract (void);
 void* atom_dot (void);
 void* atom_if (void);
@@ -69,53 +71,44 @@ void* atom_lex (void);
 void* atom_bye (void);
 void* atom_execute (void);
 void* atom_number (void);
+void* atom_find_word (void);
+
+
+#include "pgm_data.h"
+
 
 bool check_stack_underflows(void);
-
-
 
 
 typedef struct {
     uint32_t next;
     char name[8];
+} fword_hdr;
+
+
+typedef struct {
+    fword_hdr hdr;
     fword fn;
 } native_fword;
 
-#define NATIVE_ENTRY(n, name, fn)   {n, name, fn}
-
-native_fword native_dictionary[] = {
-    NATIVE_ENTRY(0,  "",         NULL),
-    NATIVE_ENTRY(0,  "next",     atom_next),
-    NATIVE_ENTRY(1,  "literal",  atom_literal),
-    NATIVE_ENTRY(2,  "exit",     atom_exit),
-    NATIVE_ENTRY(3,  "do",       atom_do),
-    NATIVE_ENTRY(4,  "loop",     atom_loop),
-    NATIVE_ENTRY(5,  "begin",    atom_begin),
-    NATIVE_ENTRY(6,  "while",    atom_while),
-    NATIVE_ENTRY(7,  "rot",      atom_rot),
-    NATIVE_ENTRY(8,  "swap",     atom_swap),
-    NATIVE_ENTRY(9,  "dup",      atom_dup),
-    NATIVE_ENTRY(10, "not",      atom_not),
-    NATIVE_ENTRY(11, "drop",     atom_drop),
-    NATIVE_ENTRY(12, "+",        atom_plus),
-    NATIVE_ENTRY(13, "-",        atom_subtract),
-    NATIVE_ENTRY(14, ".",        atom_dot),
-    NATIVE_ENTRY(15, "if",       atom_if),
-    NATIVE_ENTRY(16, "else",     atom_else),
-    NATIVE_ENTRY(17, "input",    atom_input),
-    NATIVE_ENTRY(18, "emit",     atom_emit),
-    NATIVE_ENTRY(19, "lex",      atom_lex),
-    NATIVE_ENTRY(20, "bye",      atom_bye),
-    NATIVE_ENTRY(21, "execute",  atom_execute),
-    NATIVE_ENTRY(22, "again",    atom_again),
-    NATIVE_ENTRY(23, "number",   atom_number),
-
+// Use macro definitions to determine end of native dictionary
+#define NATIVE_ENTRY(name, fn)   entry_##fn
+enum {
+#include "native_dictionary.h"
+    LAST_ENTRY_IDX
 };
 
-unsigned int end_of_dict = sizeof(native_dictionary)/sizeof(native_fword) - 1;
+#undef NATIVE_ENTRY
+#define NATIVE_ENTRY(name, fn)   {entry_##fn - 1, name, fn}
 
+native_fword native_dictionary[1000] = {
+#include "native_dictionary.h"
+};
 
+uint32_t* dictionary = (uint32_t*)native_dictionary;
 
+unsigned int top_of_dict = LAST_ENTRY_IDX - 1;  // Points to current valid word.
+unsigned int here = LAST_ENTRY_IDX * sizeof(native_fword);   // Points to next available memory byte
 
 
 #define BASE_OF_STACK   10
@@ -496,6 +489,19 @@ void* atom_subtract (void)
     return atom_next();
 }
 
+void* atom_mult (void)
+{
+    int a, b;
+
+    a = (int)pop_d();
+    b = (int)pop_d();
+    a *= b;
+    push_d((intptr_t)a);
+
+    print_fn(atom_subtract);
+    return atom_next();
+}
+
 void* atom_dot ()
 {
     char numstr[20];
@@ -615,41 +621,48 @@ void* atom_lex ()
 void* atom_find_word (void)
 {
     char* word_to_find;
-    native_fword* cur_entry;
-    unsigned int cur_idx = end_of_dict;
+    const native_fword* cur_entry;
+    int cur_idx = top_of_dict;
 
     word_to_find = (char*)pop_d();
 
     do {
-        cur_entry = &native_dictionary[cur_idx];
+        cur_entry = (native_fword*)&dictionary[cur_idx*4];
 
-        if (!strncmp (word_to_find, cur_entry->name, 7)) {
+        if (!strncmp (word_to_find, cur_entry->hdr.name, 7)) {
             break;
         }
 
-        cur_idx = cur_entry->next;
+        cur_idx = (cur_entry->hdr.next);
 
-    } while (cur_idx != 0);
+    } while (cur_idx >= 0);
 
-    if (cur_idx == 0) {
+
+        if ((cur_entry->hdr.next & 0x01) == 0) {
+            // Native word
+        } else {
+            // Forth word
+        }
+ 
+
+    if (cur_idx < 0) {
             printf("Word not found\n");
             push_d((intptr_t)word_to_find);
             push_d(0);
     } else {
-            printf("Match found \"%s\" == \"%s\" %p \n", word_to_find, cur_entry->name, cur_entry->fn);
+            printf("Match found \"%s\" == \"%s\" %p \n", word_to_find, cur_entry->hdr.name, cur_entry->fn);
             push_d((intptr_t)cur_entry->fn);
             push_d(1);
     }
 
     print_fn(atom_find_word);
 
-
     return atom_next();
 }
 
 
 fword exec_springboard[] = {
-    atom_exit,
+    atom_exit,  // Replaced by word to execute.
     atom_exit
 };
 
@@ -699,6 +712,72 @@ void* atom_number (void)
     return atom_next();
 };
 
+// Adds an inactive header
+void create_entry_header(char* name, bool is_forth_word)
+{
+    // Add next pointer, set inactive flag and is_forth_word flag
+    // Add name string
+    // Update the top_of_dict pointer to point to the first entry.
+}
+
+void create_user_dictionary(void)
+{
+    // here - points to next available byte
+    // top_of_dict - points to the last active entry in the dictionary.
+
+    // Entry header
+    // Next Ptr. Address always aligned by 4, so bits 1 and 0 are reused.
+    //    Bit 1 - Inactive bit. 0 = normal use, 1 = inactive entry, just skip.
+    //    Bit 0 - 0 = native word, 1 = forth word
+    // name[8] - Null terminated string, so max name is 7 bytes.
+
+    // For native words, the header is followed by the address of the c function to call.
+    // For forth words, the header is followed by the dictionary index of the next word to
+    //   call. Note that if the word being called is a forth word, then bit 0 is set.
+
+    // Create put4 word
+    
+
+        // Create header
+    // Next Ptr
+    // 
+
+}
+
+
+
+
+void create(char* name)
+{
+    uint8_t* dict_ptr;
+    int lit = 4;
+    // Create a dictionary header with the name.
+    // Put4 dictionary
+    //here
+    // top_of_dict 
+
+    // Align here, rounding up
+    here = (here + 3) & ~(0x3);
+    dict_ptr = (uint8_t*)dictionary;
+    dict_ptr[here];
+
+    memcpy(&dict_ptr[here], &top_of_dict, 4);
+    here += 4;
+    strncpy(&dict_ptr[here], name, 8);
+    dict_ptr[here+7] = '\0';
+    here += 8;
+    memcpy(&dict_ptr[here], atom_literal, 4);
+    here += 4;
+    memcpy(&dict_ptr[here], &lit, 4);
+    here += 4;
+    memcpy(&dict_ptr[here], atom_exit, 4);
+    here += 4;
+
+    top_of_dict++;
+
+}
+
+
 // Example:
 #define CREATE_PLACEHOLDER(fn)      \
 void* fn (void)                     \
@@ -708,20 +787,19 @@ void* fn (void)                     \
 }                                   \
                                     \
 
-
-
-
-// Get interpretation working on native words only.
-// Get bye working, so repeated typing is possible.
-// Get numbers interpreted correctly.
+// Adjust the dictionary to be a uint32_t array.
 // Add colon native word to create header in user dictionary
 // Get simple colon definition of 4 2 + working.
 
-#include "pgm_data.h"
 
 
 int main (void)
 {
+    int i;
+
+    create_user_dictionary();
+
+
     // Init machine
     memset(return_stack, 0, sizeof(return_stack));
     tors = BASE_OF_STACK;
@@ -738,8 +816,7 @@ int main (void)
     while (next_word != NULL) {
 
         next_word = next_word();
-
-        check_stack_range();
+        check_stack_range();    // Check every time, but could be done only in certain points.
     }
 
     return 0;
