@@ -78,9 +78,6 @@ void* fn (void)                     \
                                     \
 
 CREATE_PLACEHOLDER(atom_immediate);
-CREATE_PLACEHOLDER(atom_jmp0);
-CREATE_PLACEHOLDER(atom_jmp);
-CREATE_PLACEHOLDER(atom_then);
 CREATE_PLACEHOLDER(atom_until);
 CREATE_PLACEHOLDER(atom_1compile1);
 CREATE_PLACEHOLDER(atom_postpone);
@@ -99,7 +96,7 @@ typedef struct {
 
 
 native_fword native_dictionary[1000] = {
-    {NULL, "bye", atom_bye}, 
+    {NULL, "bye", atom_bye},
     {&native_dictionary[0],                     "dup",      atom_dup},
     {&native_dictionary[1],                     "swap",     atom_swap},
     {&native_dictionary[2],                     "drop",     atom_drop},
@@ -112,9 +109,9 @@ native_fword native_dictionary[1000] = {
     {&native_dictionary[9],                     "immedia",  atom_immediate},
     {&native_dictionary[10],                    "jmp0",     atom_jmp0},
     {&native_dictionary[11],                    "jmp",      atom_jmp},
-    {&native_dictionary[12],                    "if",       atom_if},
-    {&native_dictionary[13],                    "else",     atom_else},
-    {&native_dictionary[14],                    "then",     atom_then},
+    {ADD_FLAGS(&native_dictionary[12],0x04),    "if",       atom_if},
+    {ADD_FLAGS(&native_dictionary[13],0x04),    "else",     atom_else},
+    {ADD_FLAGS(&native_dictionary[14],0x04),    "then",     atom_then},
     {&native_dictionary[15],                    "begin",    atom_begin},
     {&native_dictionary[16],                    "until",    atom_until},
     {&native_dictionary[17],                    "[compil",  atom_1compile1},
@@ -332,6 +329,9 @@ void* atom_literal (void)
 
 }
 
+
+
+
 void* atom_exit (void)
 {
     print_fn(atom_exit);
@@ -363,15 +363,16 @@ void* atom_def (void)
         return NULL;
     }
 
+    // Push here pointer to be 8-byte aligned
+    here = (void*)((uint32_t)(here + 7) & ~0x7);
+
     // Create new inactive dictionary entry
-    *(uint32_t*)here = (uint32_t)entry | 0x01 | 0x02; 
+    *(uint32_t*)here = (uint32_t)entry | 0x01 | 0x02;
     entry = here;
     here += 4;
     strncpy(here, tok, 7);
     here[7] = '\0';
     here += 8;
-
-
 
     compile_mode = true;
 
@@ -389,7 +390,7 @@ void* atom_semicolon (void)
     *(fword*)here = atom_exit;
     here += 4;
 
-    
+
     // Enable the entry
     *(uint32_t*)entry = *(uint32_t*)entry & ~0x02;
 
@@ -409,6 +410,56 @@ void* atom_swap (void)
     print_fn(atom_swap);
     return next();
 }
+
+void* atom_jmp0 (void)
+{
+    char numstr[20];
+
+    // Interpret the next location as an offset
+    int offset = (intptr_t)*i_ptr;
+    i_ptr++;
+
+
+    int val = pop_d ();
+
+    // Only jump if 0 was on the data stack
+    if (val == 0) {
+        i_ptr += offset/sizeof(fword*);
+        sprintf(numstr, "jmp0 by %d", offset);
+    } else {
+        sprintf(numstr, "no jmp, val: %d", val);
+    }
+
+    print_fn_msg(atom_jmp, numstr);
+
+
+
+    return next();
+}
+
+
+
+void* atom_jmp (void)
+{
+    char numstr[20];
+
+    // Interpret the next location as an offset
+    int offset = (intptr_t)*i_ptr;
+    i_ptr++;
+
+    // Perform the actual jump
+    i_ptr += offset/sizeof(fword*);
+
+
+    sprintf(numstr, "jmp by %d", offset);
+    print_fn_msg(atom_jmp, numstr);
+
+
+
+    return next();
+}
+
+
 
 void* atom_dup (void)
 {
@@ -457,40 +508,66 @@ void* atom_plus (void)
 
 void* atom_if (void)
 {
-    char numstr[20];
-    int val;
+    char msg[40];
 
-    int jmp = (intptr_t)*i_ptr;
+    // Compile atom_jmp0 to *here
+    // here += 4
+    *(fword*)here = atom_jmp0;
+    here += 4;
 
-    val = pop_d ();
+    // push_ds(here)
+    sprintf(msg, "push %p on stack", here);
+    push_d((intptr_t)here);
 
-    if (val)
-    {
-        i_ptr++;
-    }
-    else
-    {
-        i_ptr += jmp;
-    }
+    here += 4;
 
-
-    sprintf(numstr, "(%d) %d", jmp, val);
-    print_fn_msg(atom_if, numstr);
+    print_fn_msg(atom_if, msg);
 
     return next();
 }
 
 void* atom_else (void)
 {
-    char numstr[20];
+    uint8_t* tmp;
+    int32_t offset;
+    char msg[40];
 
-    int jmp = (intptr_t)*i_ptr;
+    // Compile atom_jmp to *here
+    // here += 4
+    *(fword*)here = atom_jmp;
+    here += 4;
 
-    i_ptr += jmp;
+    tmp = (uint8_t*)pop_d();
 
+    // Store address for previous 'if'
+    offset = (int32_t)(here - tmp);
+    *(int32_t*)tmp = offset;
 
-    sprintf(numstr, "(%d)", jmp);
-    print_fn_msg(atom_else, numstr);
+    sprintf(msg, "fill %d, push %p", offset, here);
+    push_d((intptr_t)here);
+
+    here += 4;
+
+    print_fn_msg(atom_else, msg);
+
+    return next();
+}
+
+void* atom_then (void)
+{
+    uint8_t* tmp;
+    int32_t offset;
+    char msg[40];
+
+    // Pop the address to be filled from the stack
+    tmp = (uint8_t*)pop_d();
+
+    // Store address for previous 'if' or 'else'
+    offset = (int32_t)(here - tmp - 4);
+    *(int32_t*)tmp = offset;
+
+    sprintf(msg, "fill %d in", offset);
+    print_fn_msg(atom_then, msg);
 
     return next();
 }
@@ -510,8 +587,11 @@ char* find_word (char* word_to_find, uint8_t* flags)
         name = cur + 4;
         body = cur + 12;
 
+#if 0
         printf ("%x link = %08x, name = %8s, body = %p\n",
                 (link & 0x07), link, name, body);
+        fflush(stdout);
+#endif
 
         // Is entry active?
         if ((link & 0x02) == 0) {
@@ -548,13 +628,13 @@ void create_user_entries (void)
 
 #if 0
     printf ("dictionary: %p, here: %p offset: %d diff: %d\n",
-                dictionary, here, 
-                LAST_ENTRY_IDX * sizeof(native_fword), 
+                dictionary, here,
+                LAST_ENTRY_IDX * sizeof(native_fword),
                 here - dictionary);
 
     printf ("dictionary entry: %p\n", entry);
 #endif
-    
+
     // Add push4 to dictionary
     val = (uint32_t)entry | 0x01;
     entry = here;
@@ -582,16 +662,47 @@ void create_user_entries (void)
     memcpy(here, &val, 4);      here += 4;
 
 #if 0
+    // Add five? to dictionary
+    here += 4;  // Alignment
+    val = (uint32_t)entry | 0x01;
+    entry = here;
+    memcpy(here, &val, 4);      here += 4;
+    strcpy(here, "five?");      here += 8;
+    val = (uint32_t) atom_literal;
+    memcpy(here, &val, 4);      here += 4;
+    val = -5;
+    memcpy(here, &val, 4);      here += 4;
+    val = (uint32_t) atom_plus;
+    memcpy(here, &val, 4);      here += 4;
+    val = (uint32_t) atom_jmp0;
+    memcpy(here, &val, 4);      here += 4;
+    val = 16;
+    memcpy(here, &val, 4);      here += 4;
+    val = (uint32_t) atom_literal;
+    memcpy(here, &val, 4);      here += 4;
+    val = 0;
+    memcpy(here, &val, 4);      here += 4;
+    val = (uint32_t) atom_jmp;
+    memcpy(here, &val, 4);      here += 4;
+    val = 8;
+    memcpy(here, &val, 4);      here += 4;
+    val = (uint32_t) atom_literal;
+    memcpy(here, &val, 4);      here += 4;
+    val = 1;
+    memcpy(here, &val, 4);      here += 4;
+    val = (uint32_t) atom_exit;
+    memcpy(here, &val, 4);      here += 4;
+#endif
+
+#if 0
     printf ("dictionary: %p, here: %p offset: %d diff: %d\n",
-                dictionary, here, 
-                LAST_ENTRY_IDX * sizeof(native_fword), 
+                dictionary, here,
+                LAST_ENTRY_IDX * sizeof(native_fword),
                 here - dictionary);
 
     printf ("dictionary entry: %p\n", entry);
-#endif
-    
     fflush(stdout);
-
+#endif
 }
 
 int read_input_line (void)
@@ -701,6 +812,7 @@ static inline bool is_user_word (uint8_t flags)
 void compile_word (uint8_t* body, bool is_user_word)
 {
     printf("compiling %p into dictionary\n", body);
+    fflush(stdout);
 
     if (is_user_word) {
         uint32_t val = (uint32_t)body | 0x01;
@@ -751,6 +863,7 @@ void repl (void)
             }
 
             uint8_t* body_ptr = find_word(tok, &flags);
+
             if (body_ptr != NULL) {
                 if (!compile_mode || is_immediate_word(flags)) {
                     execute (body_ptr, flags);
