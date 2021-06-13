@@ -14,6 +14,7 @@ typedef    void*(*fword)(void);
 
 fword* i_ptr = NULL;
 bool compile_mode = false;
+bool postpone_flag = false;
 int print_ds(char* str, int len);
 int print_rs(char* str, int len);
 void print_fn_impl (void* fp, const char* msg, const char* out, const char* fname);
@@ -73,13 +74,10 @@ char* lex(void);
 void* fn (void)                     \
 {                                   \
     print_fn(fn);                   \
-    return next();             \
+    return next();                  \
 }                                   \
                                     \
 
-CREATE_PLACEHOLDER(atom_immediate);
-CREATE_PLACEHOLDER(atom_1compile1);
-CREATE_PLACEHOLDER(atom_postpone);
 
 
 
@@ -114,7 +112,7 @@ native_fword native_dictionary[1000] = {
     {ADD_FLAGS(&native_dictionary[15],0x04),    "begin",    atom_begin},
     {ADD_FLAGS(&native_dictionary[16],0x04),    "until",    atom_until},
     {&native_dictionary[17],                    "[compil",  atom_1compile1},
-    {&native_dictionary[18],                    "postpon",  atom_postpone},
+    {ADD_FLAGS(&native_dictionary[18],0x04),    "postpon",  atom_postpone},
     {&native_dictionary[19],                    "nop",      atom_nop},
 };
 
@@ -328,7 +326,29 @@ void* atom_literal (void)
 
 }
 
+void* atom_1compile1 (void)
+{
+    char numstr[20];
 
+    // Compile the next instruction instead of running it.
+    memcpy(here, i_ptr, 4);
+    sprintf(numstr, "compile %p", *i_ptr);
+    i_ptr++;
+    here += 4;
+
+
+    print_fn_msg(atom_1compile1, numstr);
+
+    return next();
+}
+
+void* atom_postpone (void)
+{
+    postpone_flag = true;
+
+    print_fn(atom_1compile1);
+    return next();
+}
 
 
 void* atom_exit (void)
@@ -435,6 +455,20 @@ void* atom_swap (void)
     print_fn(atom_swap);
     return next();
 }
+
+void* atom_immediate (void)
+{
+    uint32_t link;
+
+    link = *(uint32_t*) entry;
+    link |= 0x04;   // Set immediate flag.
+    link = *(uint32_t*) entry = link;
+    
+    print_fn(atom_immediate);
+    return next();
+}
+
+
 
 void* atom_jmp0 (void)
 {
@@ -888,6 +922,11 @@ void repl (void)
             }
 
             uint8_t* body_ptr = find_word(tok, &flags);
+
+            if (postpone_flag) {
+                flags &= ~0x04;          // Clear the immediate flag
+                postpone_flag = false;  // But only once.
+            }
 
             if (body_ptr != NULL) {
                 if (!compile_mode || is_immediate_word(flags)) {
