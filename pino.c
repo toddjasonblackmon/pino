@@ -78,7 +78,6 @@ void* fn (void)                     \
                                     \
 
 CREATE_PLACEHOLDER(atom_immediate);
-CREATE_PLACEHOLDER(atom_until);
 CREATE_PLACEHOLDER(atom_1compile1);
 CREATE_PLACEHOLDER(atom_postpone);
 
@@ -112,8 +111,8 @@ native_fword native_dictionary[1000] = {
     {ADD_FLAGS(&native_dictionary[12],0x04),    "if",       atom_if},
     {ADD_FLAGS(&native_dictionary[13],0x04),    "else",     atom_else},
     {ADD_FLAGS(&native_dictionary[14],0x04),    "then",     atom_then},
-    {&native_dictionary[15],                    "begin",    atom_begin},
-    {&native_dictionary[16],                    "until",    atom_until},
+    {ADD_FLAGS(&native_dictionary[15],0x04),    "begin",    atom_begin},
+    {ADD_FLAGS(&native_dictionary[16],0x04),    "until",    atom_until},
     {&native_dictionary[17],                    "[compil",  atom_1compile1},
     {&native_dictionary[18],                    "postpon",  atom_postpone},
     {&native_dictionary[19],                    "nop",      atom_nop},
@@ -349,7 +348,33 @@ void* atom_exit (void)
 void* atom_begin (void)
 {
     print_fn(atom_begin);
-    push_r(i_ptr);
+    push_d((intptr_t)here);
+
+    return next();
+}
+
+void* atom_until (void)
+{
+    uint8_t* tmp;
+    int32_t offset;
+    char msg[40];
+
+    // Compile atom_jmp0 to *here
+    // here += 4
+    *(fword*)here = atom_jmp0;
+    here += 4;
+
+    tmp = (uint8_t*)pop_d();
+
+    // Store offset to begin in *here
+    offset = (int32_t)(tmp - here - 4);
+    *(int32_t*)here = offset;
+
+    here += 4;
+
+    sprintf(msg, "fill offset %d", offset);
+
+    print_fn_msg(atom_until, msg);
 
     return next();
 }
