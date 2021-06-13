@@ -8,14 +8,7 @@
 #include <stdalign.h>
 
 // Need this to determine which are atomic vs, non-atomic functions
-// This isn't the normal way to do it, but will match how the 8051 works.
-// On that system, it needs to know where it is earlier than running the
-// the actual word because it is in a different memory location.
 #pragma GCC optimize ("align-functions=16")
-
-// This is implementing a simple fixed forth word to perform the following:
-// : fib  ( n -- )  1 1 rot 0 do dup rot dup . + loop drop drop ;
-// : pgm_1         10 fib ;
 
 typedef    void*(*fword)(void);
 
@@ -46,69 +39,102 @@ bool enable_print_ds = true;
 bool enable_print_rs = true;
 
 
-void* atom_next (void);
-void* atom_literal (void);
-void* atom_exit (void);
-void* atom_do (void);
-void* atom_loop (void);
-void* atom_begin (void);
-void* atom_while (void);
-void* atom_again (void);
-void* atom_rot (void);
-void* atom_swap (void);
+void* atom_bye (void);
 void* atom_dup (void);
-void* atom_not (void);
+void* atom_swap (void);
 void* atom_drop (void);
+void* atom_not (void);
 void* atom_plus (void);
-void* atom_mult (void);
-void* atom_subtract (void);
-void* atom_dot (void);
+void* atom_exit (void);
+void* atom_literal (void);
+void* atom_def (void);
+void* atom_semicolon (void);
+void* atom_immediate (void);
+void* atom_jmp0 (void);
+void* atom_jmp (void);
 void* atom_if (void);
 void* atom_else (void);
+void* atom_then (void);
+void* atom_begin (void);
+void* atom_until (void);
+void* atom_1compile1 (void);
+void* atom_postpone (void);
+
+
+void* next (void);
 void* atom_input (void);
-void* atom_emit (void);
 void* atom_lex (void);
-void* atom_bye (void);
-void* atom_execute (void);
+void* execute (void);
 void* atom_number (void);
-void* atom_find_word (void);
+char* find_word (char* word_to_find, bool* is_user_word);
 
 
-#include "pgm_data.h"
+#define CREATE_PLACEHOLDER(fn)      \
+void* fn (void)                     \
+{                                   \
+    print_fn(fn);                   \
+    return next();             \
+}                                   \
+                                    \
+
+CREATE_PLACEHOLDER(atom_def);
+CREATE_PLACEHOLDER(atom_semicolon);
+CREATE_PLACEHOLDER(atom_immediate);
+CREATE_PLACEHOLDER(atom_jmp0);
+CREATE_PLACEHOLDER(atom_jmp);
+CREATE_PLACEHOLDER(atom_then);
+CREATE_PLACEHOLDER(atom_until);
+CREATE_PLACEHOLDER(atom_1compile1);
+CREATE_PLACEHOLDER(atom_postpone);
+
 
 
 bool check_stack_underflows(void);
 
 
 typedef struct {
-    uint32_t next;
+//    uint32_t link;
+    void* link;
     char name[8];
 } fword_hdr;
 
 
 typedef struct {
-    fword_hdr hdr;
+    void* link;
+    char name[8];
     fword fn;
 } native_fword;
 
-// Use macro definitions to determine end of native dictionary
-#define NATIVE_ENTRY(name, fn)   entry_##fn
-enum {
-#include "native_dictionary.h"
-    LAST_ENTRY_IDX
-};
-
-#undef NATIVE_ENTRY
-#define NATIVE_ENTRY(name, fn)   {(entry_##fn - 1)*sizeof(native_fword), name, fn}
-
 native_fword native_dictionary[1000] = {
-#include "native_dictionary.h"
+    {NULL, "bye", atom_bye}, 
+    {&native_dictionary[0],     "dup",      atom_dup},
+    {&native_dictionary[1],     "swap",     atom_swap},
+    {&native_dictionary[2],     "drop",     atom_drop},
+    {&native_dictionary[3],     "not",      atom_not},
+    {&native_dictionary[4],     "+",        atom_plus},
+    {&native_dictionary[5],     "exit",     atom_exit},
+    {&native_dictionary[6],     "literal",  atom_literal},
+    {&native_dictionary[7],     "def",      atom_def},
+    {&native_dictionary[8],     ";",        atom_semicolon},
+    {&native_dictionary[9],     "immedia",  atom_immediate},
+    {&native_dictionary[10],    "jmp0",     atom_jmp0},
+    {&native_dictionary[11],    "jmp",      atom_jmp},
+    {&native_dictionary[12],    "if",       atom_if},
+    {&native_dictionary[13],    "else",     atom_else},
+    {&native_dictionary[14],    "then",     atom_then},
+    {&native_dictionary[15],    "begin",    atom_begin},
+    {&native_dictionary[16],    "until",    atom_until},
+    {&native_dictionary[17],    "[compil",  atom_1compile1},
+    {&native_dictionary[18],    "postpon",  atom_postpone},
 };
+
+#define LAST_ENTRY_IDX 19
 
 uint8_t* dictionary = (uint8_t*)native_dictionary;
 
-unsigned int top_of_dict = (LAST_ENTRY_IDX - 1)*sizeof(native_fword);  // Points to current valid word.
-unsigned int here = LAST_ENTRY_IDX * sizeof(native_fword);   // Points to next available memory byte
+// unsigned int top_of_dict = (LAST_ENTRY_IDX - 1)*sizeof(native_fword);  // Points to current valid word.
+uint8_t* entry;
+uint8_t* here;
 
 
 #define BASE_OF_STACK   10
@@ -276,7 +302,7 @@ inline static intptr_t pop_d (void)
 
 
 
-void* atom_next (void)
+void* next (void)
 {
     uintptr_t tmp = (uintptr_t)*i_ptr;
     i_ptr++;
@@ -288,7 +314,7 @@ void* atom_next (void)
         push_r(i_ptr);
         i_ptr = (fword*)tmp;
 
-        return atom_next();
+        return next();
     } else {
         return (void*)tmp;
     }
@@ -309,7 +335,7 @@ void* atom_literal (void)
 
     i_ptr++;
 
-    return atom_next();
+    return next();
 
 }
 
@@ -320,113 +346,21 @@ void* atom_exit (void)
     i_ptr = pop_r();
 
     if (i_ptr != NULL) {
-        return atom_next();
+        return next();
     } else {
         return NULL;
     }
 }
 
-void* atom_do (void)
-{
-    print_fn(atom_do);
-    push_r(i_ptr);
-
-    push_r((void*)pop_d());  // Index
-    push_r((void*)pop_d());  // Limit
-
-    return atom_next();
-}
-
-void* atom_loop (void)
-{
-    char tmpstr[40];
-    fword* loop_ptr;
-
-
-    // do {} while (++index < limit)
-
-    if (++return_stack[tors-1] < return_stack[tors]) {
-        loop_ptr = (fword*)return_stack[tors-2];
-
-        i_ptr = loop_ptr;   // Jump back
-
-        sprintf(tmpstr, "back to %p", *loop_ptr);
-    } else {
-        intptr_t idx, lim;
-        lim = (int)pop_r();    // Limit
-        idx = (int)pop_r();    // Index
-        pop_r();
-        strcpy (tmpstr, "loop exit");
-    }
-
-    print_fn_msg(atom_loop, tmpstr);
-
-
-
-    return atom_next();
-}
 
 void* atom_begin (void)
 {
     print_fn(atom_begin);
     push_r(i_ptr);
 
-    return atom_next();
+    return next();
 }
 
-void* atom_again (void)
-{
-    char tmpstr[40];
-    fword* loop_ptr;
-
-
-    loop_ptr = (fword*)return_stack[tors];
-
-    i_ptr = loop_ptr;   // Jump back
-
-    sprintf(tmpstr, "back to %p", *loop_ptr);
-
-    print_fn_msg(atom_again, tmpstr);
-
-    return atom_next();
-}
-
-
-void* atom_while (void)
-{
-    char tmpstr[40];
-    fword* loop_ptr;
-
-    int val = (int)pop_d();
-
-    if (val) {
-        loop_ptr = (fword*)return_stack[tors];
-
-        i_ptr = loop_ptr;   // Jump back
-
-        sprintf(tmpstr, "back to %p", *loop_ptr);
-    } else {
-        pop_r();
-        strcpy (tmpstr, "loop exit");
-    }
-
-    print_fn_msg(atom_while, tmpstr);
-
-    return atom_next();
-}
-
-void* atom_rot (void)
-{
-    uintptr_t tmp = data_stack[tods];
-
-    tmp                  = data_stack[tods - 2];
-    data_stack[tods - 2] = data_stack[tods - 1];
-    data_stack[tods - 1] = data_stack[tods];
-    data_stack[tods]     = tmp;
-
-    print_fn(atom_rot);
-    return atom_next();
-}
 
 void* atom_swap (void)
 {
@@ -436,7 +370,7 @@ void* atom_swap (void)
     data_stack[tods-1]     = tmp;
 
     print_fn(atom_swap);
-    return atom_next();
+    return next();
 }
 
 void* atom_dup (void)
@@ -444,7 +378,7 @@ void* atom_dup (void)
     push_d (data_stack[tods]);
 
     print_fn(atom_dup);
-    return atom_next();
+    return next();
 }
 
 void* atom_not (void)
@@ -452,7 +386,7 @@ void* atom_not (void)
     data_stack[tods] = !(data_stack[tods]);
 
     print_fn(atom_not);
-    return atom_next();
+    return next();
 }
 
 void* atom_drop ()
@@ -460,7 +394,7 @@ void* atom_drop ()
     pop_d ();
 
     print_fn(atom_drop);
-    return atom_next();
+    return next();
 }
 
 void* atom_plus (void)
@@ -473,48 +407,9 @@ void* atom_plus (void)
     push_d((intptr_t)a);
 
     print_fn(atom_plus);
-    return atom_next();
+    return next();
 }
 
-void* atom_subtract (void)
-{
-    int a, b;
-
-    a = (int)pop_d();
-    b = (int)pop_d();
-    b -= a;
-    push_d((intptr_t)b);
-
-    print_fn(atom_subtract);
-    return atom_next();
-}
-
-void* atom_mult (void)
-{
-    int a, b;
-
-    a = (int)pop_d();
-    b = (int)pop_d();
-    a *= b;
-    push_d((intptr_t)a);
-
-    print_fn(atom_subtract);
-    return atom_next();
-}
-
-void* atom_dot ()
-{
-    char numstr[20];
-    int val;
-
-    val = pop_d ();
-
-    sprintf(numstr, "out: %d", val);
-    print_fn_out(atom_literal, numstr);
-
-    print_fn(atom_dot);
-    return atom_next();
-}
 
 void* atom_if (void)
 {
@@ -538,7 +433,7 @@ void* atom_if (void)
     sprintf(numstr, "(%d) %d", jmp, val);
     print_fn_msg(atom_if, numstr);
 
-    return atom_next();
+    return next();
 }
 
 void* atom_else (void)
@@ -553,7 +448,7 @@ void* atom_else (void)
     sprintf(numstr, "(%d)", jmp);
     print_fn_msg(atom_else, numstr);
 
-    return atom_next();
+    return next();
 }
 
 void* atom_input (void)
@@ -572,21 +467,9 @@ void* atom_input (void)
     input_buffer[strcspn(input_buffer, "\n\r")] = ' ';
 
     print_fn_msg(atom_input, input_buffer);
-    return atom_next();
+    return next();
 }
 
-void* atom_emit ()
-{
-    char val;
-
-    val = pop_d ();
-
-    print_fn(atom_emit);
-    printf("%c ", val);
-    fflush(stdout);
-
-    return atom_next();
-}
 
 void* atom_lex ()
 {
@@ -615,49 +498,49 @@ void* atom_lex ()
     snprintf(tokstr, sizeof(tokstr), "\"%s\"", tok);
 
     print_fn_msg(atom_lex, tokstr);
-    return atom_next();
+    return next();
 }
 
-void* atom_find_word (void)
+char* find_word (char* word_to_find, bool* is_user_word)
 {
-    char* word_to_find;
-    const native_fword* cur_entry;
-    int cur_idx = top_of_dict;
+    uint8_t* cur;
+    bool found = false;
+    uint32_t link;
+    uint8_t* name;
+    uint8_t* body;
 
-    word_to_find = (char*)pop_d();
+    cur = entry;
 
-    do {
-        cur_entry = (native_fword*)(dictionary + cur_idx);
+    int i = 5;
 
-        if (!strncmp (word_to_find, cur_entry->hdr.name, 7)) {
-            break;
+    while (cur != NULL) {
+        link = *(uint32_t*)cur;
+        name = cur + 4;
+        body = cur + 12;
+
+        printf ("link = %08x, name = %8s, body = %p\n", link, name, body);
+
+//        if (--i == 0)
+//            break;
+
+        // Is entry active?
+        if ((link & 0x02) == 0) {
+
+            if (!strncmp (word_to_find, name, 7)) {
+                found = true;
+                break;
+            }
         }
 
-        cur_idx = (cur_entry->hdr.next);
-
-    } while (cur_idx >= 0);
-
-
-        if ((cur_entry->hdr.next & 0x01) == 0) {
-            // Native word
-        } else {
-            // Forth word
-        }
- 
-
-    if (cur_idx < 0) {
-            printf("Word not found\n");
-            push_d((intptr_t)word_to_find);
-            push_d(0);
-    } else {
-            printf("Match found \"%s\" == \"%s\" %p \n", word_to_find, cur_entry->hdr.name, cur_entry->fn);
-            push_d((intptr_t)cur_entry->fn);
-            push_d(1);
+        cur = (uint8_t*)(link & ~0x7);
     }
 
-    print_fn(atom_find_word);
+    if (found) {
+        *is_user_word = (link & 0x01);
+        return body;
+    }
 
-    return atom_next();
+    return NULL;
 }
 
 
@@ -666,7 +549,7 @@ fword exec_springboard[] = {
     atom_exit
 };
 
-void* atom_execute (void)
+void* execute (void)
 {
     char numstr[20];
     fword word_to_execute = (fword)pop_d();
@@ -674,19 +557,19 @@ void* atom_execute (void)
 
     sprintf(numstr, "%p", word_to_execute);
 
-    print_fn_msg(atom_execute, numstr);
+    print_fn_msg(execute, numstr);
 
     // Copy to springboard and jump
 
     exec_springboard[0] = word_to_execute;
     push_r(i_ptr);
     i_ptr = exec_springboard;
-    return atom_next();
+    return next();
 }
 
 void* atom_bye (void)
 {
-    print_fn(atom_execute);
+    print_fn(atom_bye);
     printf("bye!\n");
     exit(0);
 }
@@ -709,76 +592,158 @@ void* atom_number (void)
     }
 
     print_fn(atom_number);
-    return atom_next();
+    return next();
 };
 
-// Adds an inactive header
-void create_entry_header(char* name, bool is_forth_word)
+void create_user_entries (void)
 {
-    // Add next pointer, set inactive flag and is_forth_word flag
-    // Add name string
-    // Update the top_of_dict pointer to point to the first entry.
-}
+    uint32_t val;
+    uint8_t* push4_addr;
 
-void create_user_dictionary(void)
-{
-    // here - points to next available byte
-    // top_of_dict - points to the last active entry in the dictionary.
+    printf ("dictionary: %p, here: %p offset: %d diff: %d\n",
+                dictionary, here, 
+                LAST_ENTRY_IDX * sizeof(native_fword), 
+                here - dictionary);
 
-    // Entry header
-    // Next Ptr. Address always aligned by 4, so bits 1 and 0 are reused.
-    //    Bit 1 - Inactive bit. 0 = normal use, 1 = inactive entry, just skip.
-    //    Bit 0 - 0 = native word, 1 = forth word
-    // name[8] - Null terminated string, so max name is 7 bytes.
-
-    // For native words, the header is followed by the address of the c function to call.
-    // For forth words, the header is followed by the dictionary index of the next word to
-    //   call. Note that if the word being called is a forth word, then bit 0 is set.
-
-    // Create put4 word
+    printf ("dictionary entry: %p\n", entry);
     
+    // Add push4 to dictionary
+    val = (uint32_t)entry | 0x01;
+    entry = here;
+    memcpy(here, &val, 4);      here += 4;
+    strcpy(here, "push4");      here += 8;
+    push4_addr = here;          // Save this for later.
+    val = (uint32_t) atom_literal;
+    memcpy(here, &val, 4);      here += 4;
+    val = 4;
+    memcpy(here, &val, 4);      here += 4;
+    val = (uint32_t) atom_exit;
+    memcpy(here, &val, 4);      here += 4;
 
-        // Create header
-    // Next Ptr
-    // 
+    // Add push8 to dictionary
+    val = (uint32_t)entry | 0x01;
+    entry = here;
+    memcpy(here, &val, 4);      here += 4;
+    strcpy(here, "push8");      here += 8;
+    val = (uint32_t) push4_addr | 0x01;
+    memcpy(here, &val, 4);      here += 4;
+    memcpy(here, &val, 4);      here += 4;
+    val = (uint32_t) atom_plus;
+    memcpy(here, &val, 4);      here += 4;
+    val = (uint32_t) atom_exit;
+    memcpy(here, &val, 4);      here += 4;
 
+
+    printf ("dictionary: %p, here: %p offset: %d diff: %d\n",
+                dictionary, here, 
+                LAST_ENTRY_IDX * sizeof(native_fword), 
+                here - dictionary);
+
+    printf ("dictionary entry: %p\n", entry);
+    
+    fflush(stdout);
+
+}
+
+int read_input_line (void)
+{
+    return 0;
+}
+
+char* lex(void)
+{
+    return NULL;
+}
+
+void execute_word(uint8_t* body, bool is_user_word)
+{
+}
+
+bool parse_number(char* tok, int32_t* val)
+{
+    return false;
+}
+
+
+void repl (void)
+{
+
+    while (1) {
+        bool error = false;
+
+        int num_read = read_input_line();
+        if (num_read == 0)
+            continue;
+
+        while (1) {
+            bool is_user_word;
+            int32_t val;
+            char* tok = lex();
+
+            if (!tok)
+                break;
+
+            uint8_t* body_ptr = find_word(tok, &is_user_word);
+            if (body_ptr != NULL) {
+                execute_word(body_ptr, is_user_word);
+            } else if (parse_number(tok, &val)) {
+                push_d(val);
+            } else {
+                printf ("%s?\n");
+                error = true;
+                break;
+            }
+        }
+
+        if (!error) {
+            printf ("  ok\n");
+        }
+    }
 }
 
 
 
-// Example:
-#define CREATE_PLACEHOLDER(fn)      \
-void* fn (void)                     \
-{                                   \
-    print_fn(fn);                   \
-    return atom_next();             \
-}                                   \
-                                    \
+#if 0
 
-// Adjust the dictionary to be a uint32_t array.
-// Add colon native word to create header in user dictionary
-// Get simple colon definition of 4 2 + working.
+//        read input from user until newline
+//        while not end of line:
+//            lex next token
+//            if token found:
+//                search for token in dictionary
+//                if found
+//                    execute the word
+//                else
+//                    attempt to parse the word as a number
+//                    if it can be parsed as a number
+//                        place number on data stack
+//                    else
+//                        print “Error: word not found”
+//                        break
+//            else:
+//                print “  ok\n>”
+    }
 
 
 
-int main (void)
-{
-    int i;
-
-    create_user_dictionary();
 
 
-    // Init machine
-    memset(return_stack, 0, sizeof(return_stack));
-    tors = BASE_OF_STACK;
-    tods = BASE_OF_STACK;
-    input_buffer[0] = '\0';
 
     // Set to the start of the program
-    i_ptr = repl;
+    i_ptr = (fword*)(entry + 12);
+
+    bool is_user_word = false;
+    char* push8ptr = find_word ("bye", &is_user_word);
+
+//    printf ("push8ptr = %p, i_ptr = %p, is_user_word = %d\n", push8ptr, i_ptr, is_user_word);
+
+    i_ptr = (fword*)push8ptr;
+    
+
+
+    push_r(NULL);
 
     // Returns the next word to run
-    fword next_word = atom_next();
+    fword next_word = next();
 
     // Run until done.
     while (next_word != NULL) {
@@ -786,6 +751,27 @@ int main (void)
         next_word = next_word();
         check_stack_range();    // Check every time, but could be done only in certain points.
     }
+
+    print_fn(repl);
+}
+#endif
+
+
+int main (void)
+{
+    // Init machine
+    memset(return_stack, 0, sizeof(return_stack));
+    tors = BASE_OF_STACK;
+    tods = BASE_OF_STACK;
+    input_buffer[0] = '\0';
+    here = dictionary + LAST_ENTRY_IDX * sizeof(native_fword);
+    entry = here - sizeof(native_fword);
+
+
+    create_user_entries();
+
+    repl();
+
 
     return 0;
 }
