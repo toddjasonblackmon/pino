@@ -62,10 +62,7 @@ void* atom_postpone (void);
 
 
 void* next (void);
-void* atom_input (void);
-void* atom_lex (void);
-void* execute (void);
-void* atom_number (void);
+void execute (uint8_t* body, bool is_user_word);
 char* find_word (char* word_to_find, bool* is_user_word);
 
 
@@ -90,14 +87,6 @@ CREATE_PLACEHOLDER(atom_postpone);
 
 
 bool check_stack_underflows(void);
-
-
-typedef struct {
-//    uint32_t link;
-    void* link;
-    char name[8];
-} fword_hdr;
-
 
 typedef struct {
     void* link;
@@ -132,7 +121,6 @@ native_fword native_dictionary[1000] = {
 
 uint8_t* dictionary = (uint8_t*)native_dictionary;
 
-// unsigned int top_of_dict = (LAST_ENTRY_IDX - 1)*sizeof(native_fword);  // Points to current valid word.
 uint8_t* entry;
 uint8_t* here;
 
@@ -451,56 +439,6 @@ void* atom_else (void)
     return next();
 }
 
-void* atom_input (void)
-{
-    char* ret;
-
-    input_offset = 0;
-    input_buffer[0]='\0';
-
-    ret = fgets(input_buffer, sizeof(input_buffer), stdin);
-    if (ret == NULL) {
-        atom_bye(); // End of input file
-    }
-
-    // Strip newlines.
-    input_buffer[strcspn(input_buffer, "\n\r")] = ' ';
-
-    print_fn_msg(atom_input, input_buffer);
-    return next();
-}
-
-
-void* atom_lex ()
-{
-    bool string_start = (input_offset == 0);
-    char* tok;
-    char tokstr[20];
-
-    // Parse the next token, push address of next token on stack
-    // If none seen, push 0. (NULL)
-    // Update the input pointer
-
-    if (string_start) {
-        tok = strtok(input_buffer, "\r\n\t ");
-    } else {
-        tok = strtok(NULL, "\r\n\t ");
-    }
-
-    push_d((intptr_t)tok);
-
-    if (tok == NULL) {
-        tok = "NIL";
-    } else {
-        input_offset += strlen(tok);
-    }
-
-    snprintf(tokstr, sizeof(tokstr), "\"%s\"", tok);
-
-    print_fn_msg(atom_lex, tokstr);
-    return next();
-}
-
 char* find_word (char* word_to_find, bool* is_user_word)
 {
     uint8_t* cur;
@@ -511,17 +449,12 @@ char* find_word (char* word_to_find, bool* is_user_word)
 
     cur = entry;
 
-    int i = 5;
-
     while (cur != NULL) {
         link = *(uint32_t*)cur;
         name = cur + 4;
         body = cur + 12;
 
-        printf ("link = %08x, name = %8s, body = %p\n", link, name, body);
-
-//        if (--i == 0)
-//            break;
+        // printf ("link = %08x, name = %8s, body = %p\n", link, name, body);
 
         // Is entry active?
         if ((link & 0x02) == 0) {
@@ -544,29 +477,6 @@ char* find_word (char* word_to_find, bool* is_user_word)
 }
 
 
-fword exec_springboard[] = {
-    atom_exit,  // Replaced by word to execute.
-    atom_exit
-};
-
-void* execute (void)
-{
-    char numstr[20];
-    fword word_to_execute = (fword)pop_d();
-
-
-    sprintf(numstr, "%p", word_to_execute);
-
-    print_fn_msg(execute, numstr);
-
-    // Copy to springboard and jump
-
-    exec_springboard[0] = word_to_execute;
-    push_r(i_ptr);
-    i_ptr = exec_springboard;
-    return next();
-}
-
 void* atom_bye (void)
 {
     print_fn(atom_bye);
@@ -574,38 +484,19 @@ void* atom_bye (void)
     exit(0);
 }
 
-void* atom_number (void)
-{
-    char* tok = (char*)pop_d();
-    int num;
-    int retval;
-
-
-    // Attempt to interpret it as a number.
-    retval = sscanf(tok, "%d", &num);
-    printf ("sscanf retval: %d\n", retval);
-    if (retval > 0) {
-        push_d(num);    // Push the number
-        push_d(1);      // Success
-    } else {
-        push_d(0);      // Failed to read the number
-    }
-
-    print_fn(atom_number);
-    return next();
-};
-
 void create_user_entries (void)
 {
     uint32_t val;
     uint8_t* push4_addr;
 
+#if 0
     printf ("dictionary: %p, here: %p offset: %d diff: %d\n",
                 dictionary, here, 
                 LAST_ENTRY_IDX * sizeof(native_fword), 
                 here - dictionary);
 
     printf ("dictionary entry: %p\n", entry);
+#endif
     
     // Add push4 to dictionary
     val = (uint32_t)entry | 0x01;
@@ -633,13 +524,14 @@ void create_user_entries (void)
     val = (uint32_t) atom_exit;
     memcpy(here, &val, 4);      here += 4;
 
-
+#if 0
     printf ("dictionary: %p, here: %p offset: %d diff: %d\n",
                 dictionary, here, 
                 LAST_ENTRY_IDX * sizeof(native_fword), 
                 here - dictionary);
 
     printf ("dictionary entry: %p\n", entry);
+#endif
     
     fflush(stdout);
 
@@ -647,21 +539,95 @@ void create_user_entries (void)
 
 int read_input_line (void)
 {
-    return 0;
+    char* ret;
+
+    input_offset = 0;
+    input_buffer[0]='\0';
+
+    ret = fgets(input_buffer, sizeof(input_buffer), stdin);
+    if (ret == NULL) {
+        return 0;
+    }
+
+    // Strip newlines.
+    input_buffer[strcspn(input_buffer, "\n\r")] = ' ';
+
+    return strlen(ret);
 }
 
 char* lex(void)
 {
-    return NULL;
+    bool string_start = (input_offset == 0);
+    char* tok;
+
+    if (string_start) {
+        tok = strtok(input_buffer, "\r\n\t ");
+    } else {
+        tok = strtok(NULL, "\r\n\t ");
+    }
+
+    if (tok != NULL) {
+        input_offset += strlen(tok);
+    }
+
+    return tok;
 }
 
-void execute_word(uint8_t* body, bool is_user_word)
+
+void run_inner_loop (void)
 {
+    // Get the first word
+    fword next_word = next();
+
+    // Run until done.
+    while (next_word != NULL) {
+
+        next_word = next_word();
+        check_stack_range();    // Check every time, but could be done only in certain points.
+    }
 }
+
+
+fword exec_springboard[] = {
+    atom_exit,  // Replaced by word to execute.
+    atom_exit
+};
+
+void execute (uint8_t* body, bool is_user_word)
+{
+    // Copy to springboard and jump
+    if (is_user_word) {
+        uint32_t val = (uint32_t)body | 0x01;
+        exec_springboard[0] = (fword)val;
+    } else {
+        exec_springboard[0] = *(fword*)body;
+    }
+
+    push_r(NULL);
+    i_ptr = exec_springboard;
+
+
+    run_inner_loop();
+
+}
+
+
 
 bool parse_number(char* tok, int32_t* val)
 {
-    return false;
+    int retval;
+    int32_t num;
+
+
+    // Attempt to interpret it as a number.
+    retval = sscanf(tok, "%d", &num);
+    // printf ("sscanf retval: %d\n", retval);
+    if (retval > 0) {
+        *val = num;
+    }
+
+
+    return (retval > 0);
 }
 
 
@@ -671,25 +637,32 @@ void repl (void)
     while (1) {
         bool error = false;
 
+        printf ("> ");
+        fflush(stdout);
         int num_read = read_input_line();
-        if (num_read == 0)
-            continue;
+        if (num_read == 0) {
+            printf(" bye!\n");
+            break;
+        }
+
 
         while (1) {
             bool is_user_word;
             int32_t val;
             char* tok = lex();
 
-            if (!tok)
+            if (!tok) {
+                fflush(stdout);
                 break;
+            }
 
             uint8_t* body_ptr = find_word(tok, &is_user_word);
             if (body_ptr != NULL) {
-                execute_word(body_ptr, is_user_word);
+                execute (body_ptr, is_user_word);
             } else if (parse_number(tok, &val)) {
                 push_d(val);
             } else {
-                printf ("%s?\n");
+                printf ("%s?\n", tok);
                 error = true;
                 break;
             }
@@ -700,61 +673,6 @@ void repl (void)
         }
     }
 }
-
-
-
-#if 0
-
-//        read input from user until newline
-//        while not end of line:
-//            lex next token
-//            if token found:
-//                search for token in dictionary
-//                if found
-//                    execute the word
-//                else
-//                    attempt to parse the word as a number
-//                    if it can be parsed as a number
-//                        place number on data stack
-//                    else
-//                        print “Error: word not found”
-//                        break
-//            else:
-//                print “  ok\n>”
-    }
-
-
-
-
-
-
-    // Set to the start of the program
-    i_ptr = (fword*)(entry + 12);
-
-    bool is_user_word = false;
-    char* push8ptr = find_word ("bye", &is_user_word);
-
-//    printf ("push8ptr = %p, i_ptr = %p, is_user_word = %d\n", push8ptr, i_ptr, is_user_word);
-
-    i_ptr = (fword*)push8ptr;
-    
-
-
-    push_r(NULL);
-
-    // Returns the next word to run
-    fword next_word = next();
-
-    // Run until done.
-    while (next_word != NULL) {
-
-        next_word = next_word();
-        check_stack_range();    // Check every time, but could be done only in certain points.
-    }
-
-    print_fn(repl);
-}
-#endif
 
 
 int main (void)

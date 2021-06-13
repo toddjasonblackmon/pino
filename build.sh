@@ -1,3 +1,3 @@
 #! /bin/bash
 
-gcc -o cforth cforth.c
+gcc -o pino pino.c
