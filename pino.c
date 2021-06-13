@@ -13,6 +13,7 @@
 typedef    void*(*fword)(void);
 
 fword* i_ptr = NULL;
+bool compile_mode = false;
 int print_ds(char* str, int len);
 int print_rs(char* str, int len);
 void print_fn_impl (void* fp, const char* msg, const char* out, const char* fname);
@@ -44,6 +45,7 @@ void* atom_dup (void);
 void* atom_swap (void);
 void* atom_drop (void);
 void* atom_not (void);
+void* atom_nop (void);
 void* atom_plus (void);
 void* atom_exit (void);
 void* atom_literal (void);
@@ -62,8 +64,9 @@ void* atom_postpone (void);
 
 
 void* next (void);
-void execute (uint8_t* body, bool is_user_word);
-char* find_word (char* word_to_find, bool* is_user_word);
+void execute (uint8_t* body, uint8_t flags);
+char* find_word (char* word_to_find, uint8_t* is_user_word);
+char* lex(void);
 
 
 #define CREATE_PLACEHOLDER(fn)      \
@@ -74,8 +77,6 @@ void* fn (void)                     \
 }                                   \
                                     \
 
-CREATE_PLACEHOLDER(atom_def);
-CREATE_PLACEHOLDER(atom_semicolon);
 CREATE_PLACEHOLDER(atom_immediate);
 CREATE_PLACEHOLDER(atom_jmp0);
 CREATE_PLACEHOLDER(atom_jmp);
@@ -94,30 +95,34 @@ typedef struct {
     fword fn;
 } native_fword;
 
+#define ADD_FLAGS(x,f)        (void*)((uint32_t)(x) + (f))
+
+
 native_fword native_dictionary[1000] = {
     {NULL, "bye", atom_bye}, 
-    {&native_dictionary[0],     "dup",      atom_dup},
-    {&native_dictionary[1],     "swap",     atom_swap},
-    {&native_dictionary[2],     "drop",     atom_drop},
-    {&native_dictionary[3],     "not",      atom_not},
-    {&native_dictionary[4],     "+",        atom_plus},
-    {&native_dictionary[5],     "exit",     atom_exit},
-    {&native_dictionary[6],     "literal",  atom_literal},
-    {&native_dictionary[7],     "def",      atom_def},
-    {&native_dictionary[8],     ";",        atom_semicolon},
-    {&native_dictionary[9],     "immedia",  atom_immediate},
-    {&native_dictionary[10],    "jmp0",     atom_jmp0},
-    {&native_dictionary[11],    "jmp",      atom_jmp},
-    {&native_dictionary[12],    "if",       atom_if},
-    {&native_dictionary[13],    "else",     atom_else},
-    {&native_dictionary[14],    "then",     atom_then},
-    {&native_dictionary[15],    "begin",    atom_begin},
-    {&native_dictionary[16],    "until",    atom_until},
-    {&native_dictionary[17],    "[compil",  atom_1compile1},
-    {&native_dictionary[18],    "postpon",  atom_postpone},
+    {&native_dictionary[0],                     "dup",      atom_dup},
+    {&native_dictionary[1],                     "swap",     atom_swap},
+    {&native_dictionary[2],                     "drop",     atom_drop},
+    {&native_dictionary[3],                     "not",      atom_not},
+    {&native_dictionary[4],                     "+",        atom_plus},
+    {&native_dictionary[5],                     "exit",     atom_exit},
+    {&native_dictionary[6],                     "literal",  atom_literal},
+    {&native_dictionary[7],                     "def",      atom_def},
+    {ADD_FLAGS(&native_dictionary[8],0x04),     ";",        atom_semicolon},
+    {&native_dictionary[9],                     "immedia",  atom_immediate},
+    {&native_dictionary[10],                    "jmp0",     atom_jmp0},
+    {&native_dictionary[11],                    "jmp",      atom_jmp},
+    {&native_dictionary[12],                    "if",       atom_if},
+    {&native_dictionary[13],                    "else",     atom_else},
+    {&native_dictionary[14],                    "then",     atom_then},
+    {&native_dictionary[15],                    "begin",    atom_begin},
+    {&native_dictionary[16],                    "until",    atom_until},
+    {&native_dictionary[17],                    "[compil",  atom_1compile1},
+    {&native_dictionary[18],                    "postpon",  atom_postpone},
+    {&native_dictionary[19],                    "nop",      atom_nop},
 };
 
-#define LAST_ENTRY_IDX 19
+#define LAST_ENTRY_IDX 20
 
 uint8_t* dictionary = (uint8_t*)native_dictionary;
 
@@ -350,6 +355,50 @@ void* atom_begin (void)
 }
 
 
+void* atom_def (void)
+{
+    char* tok = lex();  // Get the next input
+
+    if (tok == NULL) {
+        return NULL;
+    }
+
+    // Create new inactive dictionary entry
+    *(uint32_t*)here = (uint32_t)entry | 0x01 | 0x02; 
+    entry = here;
+    here += 4;
+    strncpy(here, tok, 7);
+    here[7] = '\0';
+    here += 8;
+
+
+
+    compile_mode = true;
+
+
+    print_fn_msg(atom_def, tok);
+    return next();
+}
+
+void* atom_semicolon (void)
+{
+    uint32_t link;
+
+    compile_mode = false;
+
+    *(fword*)here = atom_exit;
+    here += 4;
+
+    
+    // Enable the entry
+    *(uint32_t*)entry = *(uint32_t*)entry & ~0x02;
+
+
+    print_fn(atom_semicolon);
+    return next();
+}
+
+
 void* atom_swap (void)
 {
     uintptr_t tmp = data_stack[tods];
@@ -374,6 +423,13 @@ void* atom_not (void)
     data_stack[tods] = !(data_stack[tods]);
 
     print_fn(atom_not);
+    return next();
+}
+
+
+void* atom_nop (void)
+{
+    print_fn(atom_nop);
     return next();
 }
 
@@ -439,7 +495,7 @@ void* atom_else (void)
     return next();
 }
 
-char* find_word (char* word_to_find, bool* is_user_word)
+char* find_word (char* word_to_find, uint8_t* flags)
 {
     uint8_t* cur;
     bool found = false;
@@ -454,7 +510,8 @@ char* find_word (char* word_to_find, bool* is_user_word)
         name = cur + 4;
         body = cur + 12;
 
-        // printf ("link = %08x, name = %8s, body = %p\n", link, name, body);
+        printf ("%x link = %08x, name = %8s, body = %p\n",
+                (link & 0x07), link, name, body);
 
         // Is entry active?
         if ((link & 0x02) == 0) {
@@ -469,7 +526,7 @@ char* find_word (char* word_to_find, bool* is_user_word)
     }
 
     if (found) {
-        *is_user_word = (link & 0x01);
+        *flags = (link & 0x07);
         return body;
     }
 
@@ -593,10 +650,10 @@ fword exec_springboard[] = {
     atom_exit
 };
 
-void execute (uint8_t* body, bool is_user_word)
+void execute (uint8_t* body, uint8_t flags)
 {
     // Copy to springboard and jump
-    if (is_user_word) {
+    if (flags & 0x01) {
         uint32_t val = (uint32_t)body | 0x01;
         exec_springboard[0] = (fword)val;
     } else {
@@ -630,6 +687,43 @@ bool parse_number(char* tok, int32_t* val)
     return (retval > 0);
 }
 
+static inline bool is_immediate_word (uint8_t flags)
+{
+    return ((flags & 0x04) != 0);
+}
+
+static inline bool is_user_word (uint8_t flags)
+{
+    return ((flags & 0x01) != 0);
+}
+
+
+void compile_word (uint8_t* body, bool is_user_word)
+{
+    printf("compiling %p into dictionary\n", body);
+
+    if (is_user_word) {
+        uint32_t val = (uint32_t)body | 0x01;
+        memcpy(here, &val, 4);
+    } else {
+        memcpy(here, body, 4);
+    }
+
+    here += 4;
+
+}
+
+void compile_literal (int32_t val)
+{
+    printf("compiling literal %d into dictionary\n", val);
+    fflush(stdout);
+
+    *(fword*)here = atom_literal;
+    here += 4;
+    memcpy(here, &val, 4);
+    here += 4;
+}
+
 
 void repl (void)
 {
@@ -647,7 +741,7 @@ void repl (void)
 
 
         while (1) {
-            bool is_user_word;
+            uint8_t flags;
             int32_t val;
             char* tok = lex();
 
@@ -656,11 +750,19 @@ void repl (void)
                 break;
             }
 
-            uint8_t* body_ptr = find_word(tok, &is_user_word);
+            uint8_t* body_ptr = find_word(tok, &flags);
             if (body_ptr != NULL) {
-                execute (body_ptr, is_user_word);
+                if (!compile_mode || is_immediate_word(flags)) {
+                    execute (body_ptr, flags);
+                } else {
+                    compile_word (body_ptr, is_user_word(flags));
+                }
             } else if (parse_number(tok, &val)) {
-                push_d(val);
+                if (compile_mode) {
+                    compile_literal(val);
+                } else {
+                    push_d(val);
+                }
             } else {
                 printf ("%s?\n", tok);
                 error = true;
@@ -682,9 +784,9 @@ int main (void)
     tors = BASE_OF_STACK;
     tods = BASE_OF_STACK;
     input_buffer[0] = '\0';
-    here = dictionary + LAST_ENTRY_IDX * sizeof(native_fword);
-    entry = here - sizeof(native_fword);
-
+    entry = dictionary + LAST_ENTRY_IDX * sizeof(native_fword);
+    here = entry + sizeof(native_fword);
+    compile_mode = false;
 
     create_user_entries();
 
