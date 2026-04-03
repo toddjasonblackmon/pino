@@ -34,6 +34,11 @@ void print_fn_impl (void* fp, const char* msg, const char* out, const char* fnam
 #define print_fn_out(p,m)
 #endif
 
+// Link Flags
+#define ENTRY_ACTIVE_FLAG 0x02
+#define ENTRY_ACTIVE      0
+#define ENTRY_INACTIVE    2
+
 bool enable_print_addr = true;
 bool enable_print_opcode = true;
 bool enable_stack_shift = true;
@@ -84,44 +89,55 @@ void* fn (void)                     \
 bool check_stack_underflows(void);
 
 typedef struct {
-    void* link;
-    char name[8];
+    uint32_t link;
+    char name[12];
     fword fn;
 } native_fword;
 
-#define ADD_FLAGS(x,f)        (void*)((uint32_t)(x) + (f))
-
-
-native_fword native_dictionary[1000] = {
-    {NULL, "bye", atom_bye},
-    {&native_dictionary[0],                     "dup",      atom_dup},
-    {&native_dictionary[1],                     "swap",     atom_swap},
-    {&native_dictionary[2],                     "drop",     atom_drop},
-    {&native_dictionary[3],                     "not",      atom_not},
-    {&native_dictionary[4],                     "+",        atom_plus},
-    {&native_dictionary[5],                     "exit",     atom_exit},
-    {&native_dictionary[6],                     "literal",  atom_literal},
-    {&native_dictionary[7],                     "def",      atom_def},
-    {ADD_FLAGS(&native_dictionary[8],0x04),     ";",        atom_semicolon},
-    {&native_dictionary[9],                     "immedia",  atom_immediate},
-    {&native_dictionary[10],                    "jmp0",     atom_jmp0},
-    {&native_dictionary[11],                    "jmp",      atom_jmp},
-    {ADD_FLAGS(&native_dictionary[12],0x04),    "if",       atom_if},
-    {ADD_FLAGS(&native_dictionary[13],0x04),    "else",     atom_else},
-    {ADD_FLAGS(&native_dictionary[14],0x04),    "then",     atom_then},
-    {ADD_FLAGS(&native_dictionary[15],0x04),    "begin",    atom_begin},
-    {ADD_FLAGS(&native_dictionary[16],0x04),    "until",    atom_until},
-    {&native_dictionary[17],                    "[compil",  atom_1compile1},
-    {ADD_FLAGS(&native_dictionary[18],0x04),    "postpon",  atom_postpone},
-    {&native_dictionary[19],                    "nop",      atom_nop},
+enum {
+	entry_user = 0x01,
+	entry_valid = 0x02,
+	entry_immediate = 0x04,
 };
 
-#define LAST_ENTRY_IDX 20
+#define ADD_FLAGS(x,f)        (void*)((uint32_t)(x) + (f))
+
+#define link_offset(target,f)     ((uint32_t)((uint8_t*)(target) - (uint8_t*)native_dictionary) + (f))
+
+
+// TODO - Find a way to not have to define each offset.
+native_fword native_dictionary[1000] = {
+    {0x00000000,                                "bye",      atom_bye},
+    {link_offset(&native_dictionary[0],  0),    "bye",      atom_bye},
+    {link_offset(&native_dictionary[1],  0),    "dup",      atom_dup},
+    {link_offset(&native_dictionary[2],  0),    "swap",     atom_swap},
+    {link_offset(&native_dictionary[3],  0),    "drop",     atom_drop},
+    {link_offset(&native_dictionary[4],  0),    "not",      atom_not},
+    {link_offset(&native_dictionary[5],  0),    "+",        atom_plus},
+    {link_offset(&native_dictionary[4],  0),    "exit",     atom_exit},
+    {link_offset(&native_dictionary[7],  0),    "literal",  atom_literal},
+    {link_offset(&native_dictionary[8],  4),    "def",      atom_def},
+    {link_offset(&native_dictionary[9],  0),    ";",        atom_semicolon},
+    {link_offset(&native_dictionary[10], 0),    "immedia",  atom_immediate},
+    {link_offset(&native_dictionary[11], 0),    "jmp0",     atom_jmp0},
+    {link_offset(&native_dictionary[10], 4),    "jmp",      atom_jmp},
+    {link_offset(&native_dictionary[13], 4),    "if",       atom_if},
+    {link_offset(&native_dictionary[14], 4),    "else",     atom_else},
+    {link_offset(&native_dictionary[15], 4),    "then",     atom_then},
+    {link_offset(&native_dictionary[14], 4),    "begin",    atom_begin},
+    {link_offset(&native_dictionary[17], 0),    "until",    atom_until},
+    {link_offset(&native_dictionary[18], 4),    "[compil",  atom_1compile1},
+    {link_offset(&native_dictionary[19], 0),    "postpon",  atom_postpone},
+    {link_offset(&native_dictionary[20], 0),    "nop",      atom_nop},
+};
+
+// TODO - Find a way to get this automagically.
+#define LAST_ENTRY_IDX 21
 
 uint8_t* dictionary = (uint8_t*)native_dictionary;
 
-uint8_t* entry;
-uint8_t* here;
+uint8_t* entry; // Pointer to the top/latest entry of the dictionary
+uint8_t* here;  // Pointer to the next available entry of the dictionary
 
 
 #define BASE_OF_STACK   10
@@ -288,7 +304,7 @@ inline static intptr_t pop_d (void)
 }
 
 
-
+// TODO - Fix this to not have recursion.
 void* next (void)
 {
     uintptr_t tmp = (uintptr_t)*i_ptr;
@@ -380,17 +396,17 @@ void* atom_until (void)
     char msg[40];
 
     // Compile atom_jmp0 to *here
-    // here += 4
+    // here += 8
     *(fword*)here = atom_jmp0;
-    here += 4;
+    here += 8;
 
     tmp = (uint8_t*)pop_d();
 
     // Store offset to begin in *here
-    offset = (int32_t)(tmp - here - 4);
+    offset = (int32_t)(tmp - here - 8);
     *(int32_t*)here = offset;
 
-    here += 4;
+    here += 8;
 
     sprintf(msg, "fill offset %d", offset);
 
@@ -403,16 +419,21 @@ void* atom_until (void)
 void* atom_def (void)
 {
     char* tok = lex();  // Get the next input
+    uint32_t* here_word;
 
     if (tok == NULL) {
         return NULL;
     }
 
+    // TODO - Should this be an assert?
     // Push here pointer to be 8-byte aligned
-    here = (void*)((uint32_t)(here + 7) & ~0x7);
+    here = (uint8_t*) ((intptr_t)(here + 7) & ~0x07);
+
+    // Now we can assign the here pointer to a word.
+    here_word = (uint32_t*)here;
 
     // Create new inactive dictionary entry
-    *(uint32_t*)here = (uint32_t)entry | 0x01 | 0x02;
+    *here_word = link_offset((native_fword*)entry, 0x01 | 0x02);
     entry = here;
     here += 4;
     strncpy(here, tok, 7);
@@ -570,15 +591,15 @@ void* atom_if (void)
     char msg[40];
 
     // Compile atom_jmp0 to *here
-    // here += 4
+    // here += 8
     *(fword*)here = atom_jmp0;
-    here += 4;
+    here += 8;
 
     // push_ds(here)
     sprintf(msg, "push %p on stack", here);
     push_d((intptr_t)here);
 
-    here += 4;
+    here += 8;
 
     print_fn_msg(atom_if, msg);
 
@@ -592,9 +613,9 @@ void* atom_else (void)
     char msg[40];
 
     // Compile atom_jmp to *here
-    // here += 4
+    // here += 8
     *(fword*)here = atom_jmp;
-    here += 4;
+    here += 8;
 
     tmp = (uint8_t*)pop_d();
 
@@ -605,7 +626,7 @@ void* atom_else (void)
     sprintf(msg, "fill %d, push %p", offset, here);
     push_d((intptr_t)here);
 
-    here += 4;
+    here += 8;
 
     print_fn_msg(atom_else, msg);
 
@@ -622,7 +643,7 @@ void* atom_then (void)
     tmp = (uint8_t*)pop_d();
 
     // Store address for previous 'if' or 'else'
-    offset = (int32_t)(here - tmp - 4);
+    offset = (int32_t)(here - tmp - 8);
     *(int32_t*)tmp = offset;
 
     sprintf(msg, "fill %d in", offset);
@@ -630,6 +651,17 @@ void* atom_then (void)
 
     return next();
 }
+
+
+uint8_t* next_entry(uint32_t link)
+{
+    if (link == 0) {
+        return NULL;
+    } else {
+        return &dictionary[link & ~0x07];
+    }
+}
+
 
 char* find_word (char* word_to_find, uint8_t* flags)
 {
@@ -642,26 +674,28 @@ char* find_word (char* word_to_find, uint8_t* flags)
     cur = entry;
 
     while (cur != NULL) {
+        // link is an integer offset into the dictionary.
         link = *(uint32_t*)cur;
-        name = cur + 4;
-        body = cur + 12;
+        name = cur + 8;
+        body = cur + 16;
 
 #if 0
-        printf ("%x link = %08x, name = %8s, body = %p\n",
+        printf ("  %x link = %8d, name = %8s, body = %p\n",
                 (link & 0x07), link, name, body);
         fflush(stdout);
 #endif
 
         // Is entry active?
-        if ((link & 0x02) == 0) {
+        if ((link & ENTRY_ACTIVE_FLAG) == ENTRY_ACTIVE) {
 
+            // Check maximum of 7 characters because we allow prefix matches.
             if (!strncmp (word_to_find, name, 7)) {
                 found = true;
                 break;
             }
         }
 
-        cur = (uint8_t*)(link & ~0x7);
+        cur = next_entry(link);
     }
 
     if (found) {
@@ -682,8 +716,9 @@ void* atom_bye (void)
 
 void create_user_entries (void)
 {
-    uint32_t val;
+    uintptr_t val;
     uint8_t* push4_addr;
+    
 
 #if 0
     printf ("dictionary: %p, here: %p offset: %d diff: %d\n",
@@ -695,62 +730,62 @@ void create_user_entries (void)
 #endif
 
     // Add push4 to dictionary
-    val = (uint32_t)entry | 0x01;
-    entry = here;
-    memcpy(here, &val, 4);      here += 4;
-    strcpy(here, "push4");      here += 8;
+
+    val = link_offset(here,  0x01);
+    memcpy(here, &val, 8);      here += 8;
+    strcpy(here, "push4");      here += 12;
     push4_addr = here;          // Save this for later.
-    val = (uint32_t) atom_literal;
-    memcpy(here, &val, 4);      here += 4;
+    val = (uintptr_t) atom_literal;
+    memcpy(here, &val, 8);      here += 8;
     val = 4;
-    memcpy(here, &val, 4);      here += 4;
-    val = (uint32_t) atom_exit;
-    memcpy(here, &val, 4);      here += 4;
+    memcpy(here, &val, 8);      here += 8;
+    val = (uintptr_t) atom_exit;
+    memcpy(here, &val, 8);      here += 8;
 
     // Add push8 to dictionary
-    val = (uint32_t)entry | 0x01;
+    val = (uintptr_t)entry | 0x01;
     entry = here;
-    memcpy(here, &val, 4);      here += 4;
+    memcpy(here, &val, 8);      here += 8;
     strcpy(here, "push8");      here += 8;
-    val = (uint32_t) push4_addr | 0x01;
-    memcpy(here, &val, 4);      here += 4;
-    memcpy(here, &val, 4);      here += 4;
-    val = (uint32_t) atom_plus;
-    memcpy(here, &val, 4);      here += 4;
-    val = (uint32_t) atom_exit;
-    memcpy(here, &val, 4);      here += 4;
+    val = (uintptr_t) push4_addr | 0x01;
+    memcpy(here, &val, 8);      here += 8;
+    memcpy(here, &val, 8);      here += 8;
+    val = (uintptr_t) atom_plus;
+    memcpy(here, &val, 8);      here += 8;
+    val = (uintptr_t) atom_exit;
+    memcpy(here, &val, 8);      here += 8;
 
 #if 0
     // Add five? to dictionary
-    here += 4;  // Alignment
+    here += 8;  // Alignment
     val = (uint32_t)entry | 0x01;
     entry = here;
-    memcpy(here, &val, 4);      here += 4;
+    memcpy(here, &val, 8);      here += 8;
     strcpy(here, "five?");      here += 8;
     val = (uint32_t) atom_literal;
-    memcpy(here, &val, 4);      here += 4;
+    memcpy(here, &val, 8);      here += 8;
     val = -5;
-    memcpy(here, &val, 4);      here += 4;
+    memcpy(here, &val, 8);      here += 8;
     val = (uint32_t) atom_plus;
-    memcpy(here, &val, 4);      here += 4;
+    memcpy(here, &val, 8);      here += 8;
     val = (uint32_t) atom_jmp0;
-    memcpy(here, &val, 4);      here += 4;
+    memcpy(here, &val, 8);      here += 8;
     val = 16;
-    memcpy(here, &val, 4);      here += 4;
+    memcpy(here, &val, 8);      here += 8;
     val = (uint32_t) atom_literal;
-    memcpy(here, &val, 4);      here += 4;
+    memcpy(here, &val, 8);      here += 8;
     val = 0;
-    memcpy(here, &val, 4);      here += 4;
+    memcpy(here, &val, 8);      here += 8;
     val = (uint32_t) atom_jmp;
-    memcpy(here, &val, 4);      here += 4;
+    memcpy(here, &val, 8);      here += 8;
     val = 8;
-    memcpy(here, &val, 4);      here += 4;
+    memcpy(here, &val, 8);      here += 8;
     val = (uint32_t) atom_literal;
-    memcpy(here, &val, 4);      here += 4;
+    memcpy(here, &val, 8);      here += 8;
     val = 1;
-    memcpy(here, &val, 4);      here += 4;
+    memcpy(here, &val, 8);      here += 8;
     val = (uint32_t) atom_exit;
-    memcpy(here, &val, 4);      here += 4;
+    memcpy(here, &val, 8);      here += 8;
 #endif
 
 #if 0
@@ -824,10 +859,10 @@ void execute (uint8_t* body, uint8_t flags)
 {
     // Copy to springboard and jump
     if (flags & 0x01) {
-        uint32_t val = (uint32_t)body | 0x01;
+        uintptr_t val = (uintptr_t)body | 0x01;
         exec_springboard[0] = (fword)val;
     } else {
-        exec_springboard[0] = *(fword*)body;
+        exec_springboard[0] = *(fword*)(body);
     }
 
     push_r(NULL);
@@ -874,25 +909,25 @@ void compile_word (uint8_t* body, bool is_user_word)
     fflush(stdout);
 
     if (is_user_word) {
-        uint32_t val = (uint32_t)body | 0x01;
-        memcpy(here, &val, 4);
+        uintptr_t val = (uintptr_t)body | 0x01;
+        memcpy(here, &val, 8);
     } else {
-        memcpy(here, body, 4);
+        memcpy(here, body, 8);
     }
 
-    here += 4;
+    here += 8;
 
 }
 
-void compile_literal (int32_t val)
+void compile_literal (intptr_t val)
 {
     printf("compiling literal %d into dictionary\n", val);
     fflush(stdout);
 
     *(fword*)here = atom_literal;
-    here += 4;
-    memcpy(here, &val, 4);
-    here += 4;
+    here += 8;
+    memcpy(here, &val, 8);
+    here += 8;
 }
 
 
@@ -961,17 +996,18 @@ int main (void)
     tors = BASE_OF_STACK;
     tods = BASE_OF_STACK;
     input_buffer[0] = '\0';
+
+    // entry points to last entry in the dictionary.
     entry = dictionary + LAST_ENTRY_IDX * sizeof(native_fword);
     here = entry + sizeof(native_fword);
     compile_mode = false;
 
-    create_user_entries();
+    // create_user_entries();
 
     repl();
 
 
     return 0;
 }
-
 
 
