@@ -21,8 +21,6 @@ void print_fn_impl (void* fp, const char* msg, const char* out, const char* fnam
 
 #define get_shift()         3*(tors - BASE_OF_STACK)
 
-#define FORTH_WORD(wp)      (fword)((uint32_t)(wp) + 1)
-#define FORTH_LIT(x)        (fword)(x)
 
 #if 1
 #define print_fn(p)         print_fn_impl (p, "", "", __func__)
@@ -54,6 +52,7 @@ void* atom_not (void);
 void* atom_nop (void);
 void* atom_plus (void);
 void* atom_exit (void);
+void* atom_exit_sb (void);
 void* atom_literal (void);
 void* atom_def (void);
 void* atom_semicolon (void);
@@ -89,8 +88,8 @@ void* fn (void)                     \
 bool check_stack_underflows(void);
 
 typedef struct {
-    uint32_t link;
-    char name[12];
+    uintptr_t link;
+    char name[8];
     fword fn;
 } native_fword;
 
@@ -102,37 +101,36 @@ enum {
 
 #define ADD_FLAGS(x,f)        (void*)((uint32_t)(x) + (f))
 
-#define link_offset(target,f)     ((uint32_t)((uint8_t*)(target) - (uint8_t*)native_dictionary) + (f))
+#define link_offset(target,f)       (uintptr_t)(target) + (f)
 
 
 // TODO - Find a way to not have to define each offset.
 native_fword native_dictionary[1000] = {
-    {0x00000000,                                "bye",      atom_bye},
-    {link_offset(&native_dictionary[0],  0),    "bye",      atom_bye},
-    {link_offset(&native_dictionary[1],  0),    "dup",      atom_dup},
-    {link_offset(&native_dictionary[2],  0),    "swap",     atom_swap},
-    {link_offset(&native_dictionary[3],  0),    "drop",     atom_drop},
-    {link_offset(&native_dictionary[4],  0),    "not",      atom_not},
-    {link_offset(&native_dictionary[5],  0),    "+",        atom_plus},
-    {link_offset(&native_dictionary[4],  0),    "exit",     atom_exit},
-    {link_offset(&native_dictionary[7],  0),    "literal",  atom_literal},
-    {link_offset(&native_dictionary[8],  4),    "def",      atom_def},
-    {link_offset(&native_dictionary[9],  0),    ";",        atom_semicolon},
-    {link_offset(&native_dictionary[10], 0),    "immedia",  atom_immediate},
-    {link_offset(&native_dictionary[11], 0),    "jmp0",     atom_jmp0},
-    {link_offset(&native_dictionary[10], 4),    "jmp",      atom_jmp},
-    {link_offset(&native_dictionary[13], 4),    "if",       atom_if},
-    {link_offset(&native_dictionary[14], 4),    "else",     atom_else},
-    {link_offset(&native_dictionary[15], 4),    "then",     atom_then},
-    {link_offset(&native_dictionary[14], 4),    "begin",    atom_begin},
-    {link_offset(&native_dictionary[17], 0),    "until",    atom_until},
-    {link_offset(&native_dictionary[18], 4),    "[compil",  atom_1compile1},
-    {link_offset(&native_dictionary[19], 0),    "postpon",  atom_postpone},
-    {link_offset(&native_dictionary[20], 0),    "nop",      atom_nop},
+    {link_offset(NULL,                   0),    "bye",      atom_bye},
+    {link_offset(&native_dictionary[0],  0),    "dup",      atom_dup},
+    {link_offset(&native_dictionary[1],  0),    "swap",     atom_swap},
+    {link_offset(&native_dictionary[2],  0),    "drop",     atom_drop},
+    {link_offset(&native_dictionary[3],  0),    "not",      atom_not},
+    {link_offset(&native_dictionary[4],  0),    "+",        atom_plus},
+    {link_offset(&native_dictionary[5],  0),    "exit",     atom_exit},
+    {link_offset(&native_dictionary[6],  0),    "literal",  atom_literal},
+    {link_offset(&native_dictionary[7],  0),    "def",      atom_def},
+    {link_offset(&native_dictionary[8],  4),    ";",        atom_semicolon},
+    {link_offset(&native_dictionary[9],  0),    "immedia",  atom_immediate},
+    {link_offset(&native_dictionary[10], 0),    "jmp0",     atom_jmp0},
+    {link_offset(&native_dictionary[11], 0),    "jmp",      atom_jmp},
+    {link_offset(&native_dictionary[12], 4),    "if",       atom_if},
+    {link_offset(&native_dictionary[13], 4),    "else",     atom_else},
+    {link_offset(&native_dictionary[14], 4),    "then",     atom_then},
+    {link_offset(&native_dictionary[15], 4),    "begin",    atom_begin},
+    {link_offset(&native_dictionary[16], 4),    "until",    atom_until},
+    {link_offset(&native_dictionary[17], 0),    "[compil",  atom_1compile1},
+    {link_offset(&native_dictionary[18], 4),    "postpon",  atom_postpone},
+    {link_offset(&native_dictionary[19], 0),    "nop",      atom_nop},
 };
 
 // TODO - Find a way to get this automagically.
-#define LAST_ENTRY_IDX 21
+#define LAST_ENTRY_IDX 20
 
 uint8_t* dictionary = (uint8_t*)native_dictionary;
 
@@ -347,10 +345,10 @@ void* atom_1compile1 (void)
     char numstr[20];
 
     // Compile the next instruction instead of running it.
-    memcpy(here, i_ptr, 4);
+    memcpy(here, i_ptr, 8);
     sprintf(numstr, "compile %p", *i_ptr);
     i_ptr++;
-    here += 4;
+    here += 8;
 
 
     print_fn_msg(atom_1compile1, numstr);
@@ -366,6 +364,17 @@ void* atom_postpone (void)
     return next();
 }
 
+// silent version of atom_exit
+void* atom_exit_sb (void)
+{
+    i_ptr = pop_r();
+
+    if (i_ptr != NULL) {
+        return next();
+    } else {
+        return NULL;
+    }
+}
 
 void* atom_exit (void)
 {
@@ -419,7 +428,7 @@ void* atom_until (void)
 void* atom_def (void)
 {
     char* tok = lex();  // Get the next input
-    uint32_t* here_word;
+    uintptr_t* here_word;
 
     if (tok == NULL) {
         return NULL;
@@ -427,15 +436,15 @@ void* atom_def (void)
 
     // TODO - Should this be an assert?
     // Push here pointer to be 8-byte aligned
-    here = (uint8_t*) ((intptr_t)(here + 7) & ~0x07);
+    // here = (uint8_t*) ((intptr_t)(here + 7) & ~0x07);
 
     // Now we can assign the here pointer to a word.
-    here_word = (uint32_t*)here;
+    here_word = (uintptr_t*)here;
 
     // Create new inactive dictionary entry
     *here_word = link_offset((native_fword*)entry, 0x01 | 0x02);
     entry = here;
-    here += 4;
+    here += 8;
     strncpy(here, tok, 7);
     here[7] = '\0';
     here += 8;
@@ -454,7 +463,7 @@ void* atom_semicolon (void)
     compile_mode = false;
 
     *(fword*)here = atom_exit;
-    here += 4;
+    here += 8;
 
 
     // Enable the entry
@@ -653,13 +662,9 @@ void* atom_then (void)
 }
 
 
-uint8_t* next_entry(uint32_t link)
+uint8_t* next_entry(uintptr_t link)
 {
-    if (link == 0) {
-        return NULL;
-    } else {
-        return &dictionary[link & ~0x07];
-    }
+    return (uint8_t*)(link & ~0x07);
 }
 
 
@@ -667,7 +672,7 @@ char* find_word (char* word_to_find, uint8_t* flags)
 {
     uint8_t* cur;
     bool found = false;
-    uint32_t link;
+    uintptr_t link;
     uint8_t* name;
     uint8_t* body;
 
@@ -675,13 +680,13 @@ char* find_word (char* word_to_find, uint8_t* flags)
 
     while (cur != NULL) {
         // link is an integer offset into the dictionary.
-        link = *(uint32_t*)cur;
+        link = *(uintptr_t*)cur;
         name = cur + 8;
         body = cur + 16;
 
 #if 0
-        printf ("  %x link = %8d, name = %8s, body = %p\n",
-                (link & 0x07), link, name, body);
+        printf ("link = %12u, flags = %1d, name = %8s, body = %p\n",
+                link, (link & 0x07), name, body);
         fflush(stdout);
 #endif
 
@@ -852,7 +857,7 @@ void run_inner_loop (void)
 
 fword exec_springboard[] = {
     atom_exit,  // Replaced by word to execute.
-    atom_exit
+    atom_exit_sb
 };
 
 void execute (uint8_t* body, uint8_t flags)
